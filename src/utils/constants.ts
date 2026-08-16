@@ -746,6 +746,10 @@ export const EquicordDevs = Object.freeze({
         name: "nobody",
         id: 0n
     },
+    mia: {
+        name: "mia-cx",
+        id: 0n
+    },
     dotdas: {
         name: "dotdas",
         id: 353229259482857475n
