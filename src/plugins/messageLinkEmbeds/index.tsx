@@ -20,14 +20,14 @@ import { addMessageAccessory, removeMessageAccessory } from "@api/MessageAccesso
 import { updateMessage } from "@api/MessageUpdater";
 import { definePluginSettings } from "@api/Settings";
 import { getUserSettingLazy } from "@api/UserSettings";
-import { BaseText } from "@components/BaseText";
+import { Button } from "@components/Button";
+import { Span } from "@components/Span";
 import { Devs } from "@utils/constants.js";
 import { Queue } from "@utils/Queue";
 import definePlugin, { OptionType } from "@utils/types";
 import { Channel, Message } from "@vencord/discord-types";
 import { findComponentByCodeLazy, findComponentLazy, findCssClassesLazy } from "@webpack";
 import {
-    Button,
     ChannelStore,
     Constants,
     GuildStore,
@@ -45,6 +45,8 @@ const messageCache = new Map<string, {
     message?: Message;
     fetched: boolean;
 }>();
+
+const getCacheKey = (channelId: string, messageId: string) => `${channelId}:${messageId}`;
 
 const Embed = findComponentLazy(m => m.prototype?.renderSuppressButton);
 const ChannelMessage = findComponentByCodeLazy("childrenExecutedCommand:", ".hideAccessories");
@@ -127,17 +129,19 @@ const settings = definePluginSettings({
     }
 });
 
-async function fetchMessage(channelID: string, messageID: string) {
-    const cached = messageCache.get(messageID);
+async function fetchMessage(channelId: string, messageId: string) {
+    const cacheKey = getCacheKey(channelId, messageId);
+
+    const cached = messageCache.get(cacheKey);
     if (cached) return cached.message;
 
-    messageCache.set(messageID, { fetched: false });
+    messageCache.set(cacheKey, { fetched: false });
 
     const res = await RestAPI.get({
-        url: Constants.Endpoints.MESSAGES(channelID),
+        url: Constants.Endpoints.MESSAGES(channelId),
         query: {
             limit: 1,
-            around: messageID
+            around: messageId
         },
         retries: 2
     }).catch(() => null);
@@ -145,10 +149,12 @@ async function fetchMessage(channelID: string, messageID: string) {
     const msg = res?.body?.[0];
     if (!msg) return;
 
+    if (msg.id !== messageId) return;
+
     const message = MessageStore.getMessages(msg.channel_id).receiveMessage(msg).get(msg.id);
     if (!message) return;
 
-    messageCache.set(message.id, {
+    messageCache.set(cacheKey, {
         message,
         fetched: true
     });
@@ -227,31 +233,37 @@ function MessageEmbedAccessory({ message }: { message: Message; }) {
 
     const accessories = [] as (JSX.Element | null)[];
 
-    for (const [_, channelID, messageID] of message.content!.matchAll(messageLinkRegex)) {
-        if (embeddedBy.includes(messageID) || embeddedBy.length > 2) {
+    const seen = new Set<string>();
+    let count = 0;
+    for (const [_, channelId, messageId] of message.content!.matchAll(messageLinkRegex)) {
+        if (embeddedBy.includes(messageId) || embeddedBy.length > 2 || seen.has(messageId) || count >= 5) {
             continue;
         }
 
-        const linkedChannel = ChannelStore.getChannel(channelID);
+        seen.add(messageId);
+        count++;
+
+        const linkedChannel = ChannelStore.getChannel(channelId);
         if (!linkedChannel || (!linkedChannel.isPrivate() && !PermissionStore.can(PermissionsBits.VIEW_CHANNEL, linkedChannel))) {
             continue;
         }
 
         const { listMode, idList } = settings.store;
 
-        const isListed = [linkedChannel.guild_id, channelID, message.author.id].some(id => id && idList.includes(id));
+        const isListed = [linkedChannel.guild_id, channelId, message.author.id].some(id => id && idList.includes(id));
 
         if (listMode === "blacklist" && isListed) continue;
         if (listMode === "whitelist" && !isListed) continue;
 
-        let linkedMessage = messageCache.get(messageID)?.message;
+        const cacheKey = getCacheKey(channelId, messageId);
+        let linkedMessage = messageCache.get(cacheKey)?.message;
         if (!linkedMessage) {
-            linkedMessage ??= MessageStore.getMessage(channelID, messageID);
+            linkedMessage ??= MessageStore.getMessage(channelId, messageId);
             if (linkedMessage) {
-                messageCache.set(messageID, { message: linkedMessage, fetched: true });
+                messageCache.set(cacheKey, { message: linkedMessage, fetched: true });
             } else {
 
-                messageFetchQueue.unshift(() => fetchMessage(channelID, messageID)
+                messageFetchQueue.unshift(() => fetchMessage(channelId, messageId)
                     .then(m => m && updateMessage(message.channel_id, message.id))
                 );
                 continue;
@@ -293,10 +305,10 @@ function ChannelMessageEmbedAccessory({ message, channel }: MessageEmbedProps): 
                 rawDescription: "",
                 color: "var(--background-base-lower)",
                 author: {
-                    name: <BaseText size="xs" weight="medium" tag="span">
+                    name: <Span size="xs" weight="medium">
                         <span>{channelLabel} - </span>
                         {Parser.parse(channel.isDM() ? `<@${dmReceiver.id}>` : `<#${channel.id}>`)}
-                    </BaseText>,
+                    </Span>,
                     iconProxyURL: iconUrl
                 }
             }}
@@ -331,7 +343,7 @@ function AutomodEmbedAccessory(props: MessageEmbedProps): JSX.Element | null {
     return <AutoModEmbed
         channel={channel}
         childrenAccessories={
-            <BaseText size="xs" weight="medium" color="text-muted" tag="span" className={`${EmbedClasses.embedAuthor} ${EmbedClasses.embedMargin}`}>
+            <Span size="xs" weight="medium" color="text-muted" className={`${EmbedClasses.embedAuthor} ${EmbedClasses.embedMargin}`}>
                 {iconUrl && <img src={iconUrl} className={EmbedClasses.embedAuthorIcon} alt="" />}
                 <span>
                     <span>{channelLabel} - </span>
@@ -340,7 +352,7 @@ function AutomodEmbedAccessory(props: MessageEmbedProps): JSX.Element | null {
                         : Parser.parse(`<#${channel.id}>`)
                     }
                 </span>
-            </BaseText>
+            </Span>
         }
         compact={compact}
         content={
@@ -353,7 +365,7 @@ function AutomodEmbedAccessory(props: MessageEmbedProps): JSX.Element | null {
                     const { width, height } = computeWidthAndHeight(a.width, a.height);
                     return (
                         <div key={idx}>
-                            <img src={a.url} width={width} height={height} />
+                            <img src={a.proxyURL ?? a.url} width={width} height={height} />
                         </div>
                     );
                 })}

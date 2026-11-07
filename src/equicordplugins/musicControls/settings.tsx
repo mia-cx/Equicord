@@ -6,12 +6,15 @@
 
 import { definePluginSettings } from "@api/Settings";
 import { disableStyle, enableStyle } from "@api/Styles";
-import { ButtonCompat } from "@components/Button";
-import { HeadingSecondary } from "@components/Heading";
+import { Button } from "@components/Button";
+import { Heading } from "@components/Heading";
+import { Margins } from "@components/margins";
+import { Notice } from "@components/Notice";
 import { Paragraph } from "@components/Paragraph";
 import { SettingsSection } from "@components/settings/tabs/plugins/components/Common";
+import { useCspPermission } from "@utils/csp";
 import { makeRange, OptionType } from "@utils/types";
-import { MaskedLink, Select, showToast, TextInput, Toasts } from "@webpack/common";
+import { MaskedLink, Select, showToast, TextInput } from "@webpack/common";
 
 import hoverOnlyStyle from "./hoverOnly.css?managed";
 import { clearLyricsCache, removeTranslations } from "./spotify/lyrics/api";
@@ -30,7 +33,7 @@ export function toggleHoverControls(value: boolean) {
 function InstallInstructions() {
     return (
         <section>
-            <HeadingSecondary>How to install</HeadingSecondary>
+            <Heading tag="h3" className={Margins.bottom8}>How to install</Heading>
             <Paragraph>
                 Install <MaskedLink href="https://github.com/Inrixia/TidaLuna#installation">TidaLuna</MaskedLink> from here, then go to TidalLuna settings &rarr; Plugin stores &rarr; Install <code>@vmohammad/api</code>
             </Paragraph>
@@ -39,7 +42,8 @@ function InstallInstructions() {
 }
 
 function LyricsProviderSettings() {
-    const { store } = settings;
+    const { spotifyLyricsApiUrl } = settings.use(["spotifyLyricsApiUrl"]);
+    const [isLyricsServerAllowed, allowLyricsServer] = useCspPermission(spotifyLyricsApiUrl.trim(), ["connect-src"], "MusicControls");
 
     return (
         <>
@@ -49,14 +53,14 @@ function LyricsProviderSettings() {
                         { value: Provider.Lrclib, label: "LRCLIB", default: true },
                         { value: Provider.Spotify, label: "Spotify (Musixmatch)" },
                     ]}
-                    isSelected={v => v === store.lyricsProvider}
-                    select={v => { store.lyricsProvider = v as Provider; }}
+                    isSelected={v => v === settings.store.lyricsProvider}
+                    select={v => { settings.store.lyricsProvider = v as Provider; }}
                     serialize={v => v}
                     placeholder="Select a lyrics provider"
                 />
             </SettingsSection>
 
-            {store.lyricsProvider === Provider.Spotify && (
+            {settings.store.lyricsProvider === Provider.Spotify && (
                 <SettingsSection
                     id="spotify-lyrics-provider"
                     name="Spotify Lyrics API Base URL"
@@ -64,16 +68,22 @@ function LyricsProviderSettings() {
                 >
                     <TextInput
                         type="text"
-                        value={store.spotifyLyricsApiUrl}
+                        value={settings.store.spotifyLyricsApiUrl}
                         onChange={v => {
-                            store.spotifyLyricsApiUrl = v;
+                            settings.store.spotifyLyricsApiUrl = v;
                             void clearLyricsCache();
-                            showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+                            showToast({ text: "Lyrics cache purged", variant: "success" });
                         }}
                         placeholder="https://spotify-lyrics-api-pi.vercel.app"
                         maxLength={null}
                     />
                 </SettingsSection>
+            )}
+
+            {!isLyricsServerAllowed && settings.store.lyricsProvider === Provider.Spotify && (
+                <Notice variant="warning" action={<Button size="small" variant="secondary" onClick={allowLyricsServer}>Allow Host</Button>}>
+                    Connections to {URL.parse(spotifyLyricsApiUrl.trim())?.host} are blocked. Allow this host if you trust it, then restart Discord.
+                </Notice>
             )}
         </>
     );
@@ -115,7 +125,7 @@ export const settings = definePluginSettings({
         default: "https://spotify-lyrics-api-pi.vercel.app",
         onChange: async () => {
             await clearLyricsCache();
-            showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+            showToast({ text: "Lyrics cache purged", variant: "success" });
         }
     },
     lyricsProviderSettings: {
@@ -128,7 +138,7 @@ export const settings = definePluginSettings({
         options: languages,
         onChange: async () => {
             await removeTranslations();
-            showToast("Translations cleared", Toasts.Type.SUCCESS);
+            showToast({ text: "Translations cleared", variant: "success" });
         }
     },
     lyricsConversion: {
@@ -160,22 +170,22 @@ export const settings = definePluginSettings({
         description: "Purge the lyrics cache",
         type: OptionType.COMPONENT,
         component: () => (
-            <ButtonCompat
-                color={ButtonCompat.Colors.RED}
+            <Button
+                variant="dangerPrimary"
                 onClick={() => {
                     clearLyricsCache();
-                    showToast("Lyrics cache purged", Toasts.Type.SUCCESS);
+                    showToast({ text: "Lyrics cache purged", variant: "success" });
                 }}
             >
                 Purge Cache
-            </ButtonCompat>
+            </Button>
         ),
     },
     spotifySectionTitle: {
         type: OptionType.COMPONENT,
         component: () => (
             <section>
-                <HeadingSecondary>Spotify</HeadingSecondary>
+                <Heading tag="h3" className={Margins.bottom8}>Spotify</Heading>
             </section>
         )
     },
@@ -204,7 +214,7 @@ export const settings = definePluginSettings({
         type: OptionType.COMPONENT,
         component: () => (
             <section>
-                <HeadingSecondary>Tidal</HeadingSecondary>
+                <Heading tag="h3" className={Margins.bottom8}>Tidal</Heading>
             </section>
         )
     },

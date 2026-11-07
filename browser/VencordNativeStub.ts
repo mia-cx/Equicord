@@ -39,6 +39,8 @@ const setCssDebounced = debounce((css: string) => VencordNative.quickCss.set(css
 
 const themeStore = DataStore.createStore("VencordThemes", "VencordThemeData");
 
+let win: Window;
+
 // probably should make this less cursed at some point
 window.VencordNative = {
     themes: {
@@ -73,8 +75,8 @@ window.VencordNative = {
     updater: {
         getRepo: async () => ({ ok: true, value: "https://github.com/Equicord/Equicord" }),
         getUpdates: async () => ({ ok: true, value: [] }),
-        update: async () => ({ ok: true, value: false }),
-        rebuild: async () => ({ ok: true, value: true }),
+        fetchUpdate: async () => ({ ok: true, value: false }),
+        applyUpdate: async () => ({ ok: true, value: true }),
     },
 
     quickCss: {
@@ -98,7 +100,10 @@ window.VencordNative = {
             }
 
             const features = `popup,width=${Math.min(window.innerWidth, 1000)},height=${Math.min(window.innerHeight, 1000)}`;
-            const win = open("about:blank", "VencordQuickCss", features);
+
+            win?.close();
+
+            win = open("about:blank", "VencordQuickCss", features)!;
             if (!win) {
                 alert("Failed to open QuickCSS popup. Make sure to allow popups!");
                 return;
@@ -123,7 +128,8 @@ window.VencordNative = {
     settings: {
         get: () => {
             try {
-                return JSON.parse(localStorage.getItem("EquicordSettings") || "{}");
+                const settings = JSON.parse(localStorage.getItem("EquicordSettings") || "{}");
+                return typeof settings === "string" ? JSON.parse(settings) : settings;
             } catch (e) {
                 console.error("Failed to parse settings from localStorage: ", e);
                 return {};
@@ -136,9 +142,4 @@ window.VencordNative = {
 
     pluginHelpers: {} as any,
     csp: {} as any,
-    tray: {
-        setUpdateState: NOOP,
-        onCheckUpdates: NOOP,
-        onRepair: NOOP,
-    },
 };

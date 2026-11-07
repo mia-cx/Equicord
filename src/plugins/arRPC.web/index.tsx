@@ -18,12 +18,13 @@
 
 import { popNotice, showNotice } from "@api/Notices";
 import { migratePluginSettings } from "@api/Settings";
-import { HeadingSecondary } from "@components/Heading";
+import { Heading } from "@components/Heading";
 import { Link } from "@components/Link";
+import { Margins } from "@components/margins";
 import { Paragraph } from "@components/Paragraph";
 import { Devs } from "@utils/constants";
 import definePlugin, { ReporterTestable } from "@utils/types";
-import { ApplicationAssetUtils, fetchApplicationsRPC, FluxDispatcher, Toasts } from "@webpack/common";
+import { ApplicationAssetUtils, fetchApplicationsRPC, FluxDispatcher, showToast } from "@webpack/common";
 
 async function lookupAsset(applicationId: string, key: string): Promise<string> {
     return (await ApplicationAssetUtils.fetchAssetIds(applicationId, [key]))[0];
@@ -45,11 +46,11 @@ export default definePlugin({
     tags: ["Activity", "Utility"],
     authors: [Devs.Ducko],
     reporterTestable: ReporterTestable.None,
-    hidden: !IS_EQUIBOP && !IS_VESKTOP && !("legcord" in window),
+    hidden: IS_EQUIBOP || IS_VESKTOP || "legcord" in window,
 
     settingsAboutComponent: () => (
         <>
-            <HeadingSecondary>How to use arRPC</HeadingSecondary>
+            <Heading className={Margins.bottom8}>How to use arRPC</Heading>
             <Paragraph>
                 <Link href="https://github.com/OpenAsar/arrpc/tree/main#server">Follow the instructions in the GitHub repo</Link> to get the server running, and then enable the plugin.
             </Paragraph>
@@ -92,16 +93,7 @@ export default definePlugin({
             return;
         }
 
-        Toasts.show({
-            // show toast on success
-            message: "Connected to arRPC",
-            type: Toasts.Type.SUCCESS,
-            id: Toasts.genId(),
-            options: {
-                duration: 1000,
-                position: Toasts.Position.BOTTOM
-            }
-        });
+        showToast({ text: "Connected to arRPC", variant: "success" });
     },
 
     stop() {

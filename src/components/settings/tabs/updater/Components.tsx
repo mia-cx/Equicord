@@ -12,9 +12,9 @@ import { Link } from "@components/Link";
 import { Paragraph } from "@components/Paragraph";
 import { Span } from "@components/Span";
 import { Margins } from "@utils/margins";
-import { relaunch } from "@utils/native";
+import { promptToRestart } from "@utils/promptToRestart";
 import { changes, checkForUpdates, update, updateError } from "@utils/updater";
-import { ConfirmModal, openModal, React, Toasts, useState } from "@webpack/common";
+import { React, showToast, useState } from "@webpack/common";
 
 import { runWithDispatch } from "./runWithDispatch";
 
@@ -90,14 +90,8 @@ export function Updatable(props: CommonProps) {
                         } else {
                             setUpdates([]);
 
-                            Toasts.show({
-                                message: "No updates found!",
-                                id: Toasts.genId(),
-                                type: Toasts.Type.MESSAGE,
-                                options: {
-                                    position: Toasts.Position.BOTTOM
-                                }
-                            });
+                            showToast({ text: "No updates found!", position: "bottom" });
+
                         }
                     })}
                 >
@@ -112,22 +106,11 @@ export function Updatable(props: CommonProps) {
                             if (await update()) {
                                 setUpdates([]);
 
-                                await new Promise<void>(r => {
-                                    openModal(props => (
-                                        <ConfirmModal
-                                            {...props}
-                                            title="Update Success!"
-                                            subtitle="Successfully updated. Restart now to apply the changes?"
-                                            confirmText="Restart"
-                                            cancelText="Not now!"
-                                            variant="primary"
-                                            onConfirm={() => {
-                                                relaunch();
-                                                r();
-                                            }}
-                                            onCancel={r}
-                                        />
-                                    ));
+                                promptToRestart("relaunch", {
+                                    title: "Update Success!",
+                                    subtitle: "Successfully updated. Restart now to apply the changes?",
+                                    confirmText: "Restart",
+                                    cancelText: "Not now!"
                                 });
                             }
                         })}

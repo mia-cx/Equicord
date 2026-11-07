@@ -15,6 +15,7 @@ import { isPluginEnabled } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import { disableStyle, enableStyle } from "@api/Styles";
 import ErrorBoundary from "@components/ErrorBoundary";
+import { EyeIcon, HistoryIcon } from "@components/Icons";
 import { Devs, EQUIBOT_USER_ID, EquicordDevs, SUPPORT_CHANNEL_ID, VC_SUPPORT_CATEGORY_ID, VENBOT_USER_ID } from "@utils/constants";
 import { getIntlMessage } from "@utils/discord";
 import { Logger } from "@utils/Logger";
@@ -120,6 +121,7 @@ const patchMessageContextMenu: NavContextMenuPatchCallback = (
                 id={TOGGLE_DELETE_STYLE_ID}
                 key={TOGGLE_DELETE_STYLE_ID}
                 label="Toggle Deleted Highlight"
+                leadingAccessory={{ type: "icon", icon: EyeIcon }}
                 action={() => domElement.classList.toggle("messagelogger-deleted")}
             />,
         );
@@ -151,7 +153,7 @@ const patchMessageContextMenu: NavContextMenuPatchCallback = (
     let label;
 
     if (!isPluginEnabled("MessageLoggerEnhanced")) {
-        label = "Remove Message History";
+        label = "Clear Message History";
     } else {
         label = "Remove Message (Temporary)";
     }
@@ -161,6 +163,7 @@ const patchMessageContextMenu: NavContextMenuPatchCallback = (
             id={REMOVE_HISTORY_ID}
             key={REMOVE_HISTORY_ID}
             label={label}
+            leadingAccessory={{ type: "icon", icon: HistoryIcon }}
             color="danger"
             action={() => {
                 clearMessageHistory(message);
@@ -368,6 +371,12 @@ export const settings = definePluginSettings({
         description: "Whether to log edited messages",
         default: true,
     },
+    logDeletedAttachments: {
+        type: OptionType.BOOLEAN,
+        description: "Whether to log deleted attachments",
+        default: true,
+        restartNeeded: true,
+    },
     inlineEdits: {
         type: OptionType.BOOLEAN,
         description: "Whether to display edit history as part of message content",
@@ -376,7 +385,7 @@ export const settings = definePluginSettings({
     ignoreBots: {
         type: OptionType.BOOLEAN,
         description: "Whether to ignore messages by bots",
-        default: false,
+        default: true,
     },
     ignoreSelf: {
         type: OptionType.BOOLEAN,
@@ -438,7 +447,7 @@ export default definePlugin({
     name: "MessageLogger",
     description: "Temporarily logs deleted and edited messages.",
     tags: ["Chat", "Utility"],
-    authors: [Devs.rushii, Devs.Ven, Devs.AutumnVN, Devs.Nickyux, Devs.Kyuuhachi, Devs.sadan, EquicordDevs.justjxke],
+    authors: [Devs.rushii, Devs.Ven, Devs.AutumnVN, Devs.Nickyux, Devs.Kyuuhachi, Devs.sadan, EquicordDevs.justjxke, Devs.f3tch],
     dependencies: ["MessageUpdaterAPI"],
     isModified: true,
     settings,
@@ -453,6 +462,27 @@ export default definePlugin({
 
     start() {
         addDeleteStyle();
+    },
+
+    messagePopoverButton: {
+        icon: HistoryIcon,
+        render(message) {
+            const current = MessageStore.getMessage(message.channel_id, message.id) as MLMessage | undefined;
+
+            if (!current || !doesMessageHaveHistory(current))
+                return null;
+
+            return {
+                label: "Clear history",
+                icon: HistoryIcon,
+                onClick: () => {
+                    const latest = MessageStore.getMessage(message.channel_id, message.id) as MLMessage | undefined;
+                    if (!latest) return;
+
+                    clearMessageHistory(latest);
+                }
+            };
+        }
     },
 
     renderEdits: ErrorBoundary.wrap(
@@ -717,6 +747,22 @@ export default definePlugin({
         ]]
     }),
 
+    /**
+     * Get the reaction target for a reaction command like `+:emoji:`
+     *
+     * in the case of something like
+     * >actual message
+     * >deleted message
+     * >chatbox
+     * discord would grab and try to react to the deleted message
+     *
+     * https://github.com/Vendicated/Vencord/issues/4063
+     */
+    getReactionTarget(channelId: string) {
+        const msgs = MessageStore.getMessages(channelId)._array;
+        return msgs.findLast(msg => !msg.deleted);
+    },
+
     patches: [
         {
             find: '"MessageStore"',
@@ -792,6 +838,7 @@ export default definePlugin({
                 // just mark deleted attachments as deleted on MESSAGE_UPDATE
                 {
                     match: /attachments:(\i)\.attachments\?\?\[\],/,
+                    predicate: () => settings.store.logDeletedAttachments,
                     replace: "attachments: $self.handleUpdateAttachments($1),"
                 }
             ]
@@ -903,6 +950,14 @@ export default definePlugin({
             replacement: {
                 match: /receiveMessage\((\i)\)\{/,
                 replace: "$& $self.normalizeNonce($1);"
+            }
+        },
+        {
+            find: "anyScopeRegex(/^\\+:(.+?): *$/)",
+            replacement: {
+                match: /(?<=anyScopeRegex\(\/\^\\\+:\(\.\+\?\): \*\$\/\),action\(\i,\i\)\{.{10,80}?\i=)\i\.\i\.getMessages\((\i\.id)\)\.last\(\)/,
+                replace: "$self.getReactionTarget($1)"
+
             }
         }
     ]

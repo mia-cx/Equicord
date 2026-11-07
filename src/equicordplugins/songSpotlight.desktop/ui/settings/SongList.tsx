@@ -68,6 +68,7 @@ function EditableSong({ index, song, insert, setSongRef, onDrag, onDrop, onRemov
                             id="copy-link"
                             label="Copy link"
                             icon={LinkIcon}
+                            leadingAccessory={{ type: "icon", icon: LinkIcon }}
                             action={() => render && copyWithToast(render.link)}
                             disabled={!render}
                         />
@@ -76,6 +77,7 @@ function EditableSong({ index, song, insert, setSongRef, onDrag, onDrop, onRemov
                             color="danger"
                             label="Remove song"
                             icon={TrashIcon}
+                            leadingAccessory={{ type: "icon", icon: TrashIcon }}
                             action={() => onRemove(song)}
                         />
                     </Menu.Menu>
@@ -194,7 +196,7 @@ export default function SongList({ localData, setLocalData }: SongListProps) {
         if (localData.length >= apiConstants.songLimit) return "Not enough space";
         if (localData.some(x => sid(x) === sid(song))) return "You've already added this song";
 
-        showToast("Added song!");
+        showToast({ text: "Added song!" });
         setLocalData([
             ...localData,
             song,
@@ -205,7 +207,7 @@ export default function SongList({ localData, setLocalData }: SongListProps) {
         const i = localData.indexOf(song);
         if (i === -1) return;
 
-        showToast("Removed song!");
+        showToast({ text: "Removed song!" });
         setLocalData(localData.toSpliced(i, 1));
     }, [localData]);
 

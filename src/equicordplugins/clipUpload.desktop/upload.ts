@@ -8,7 +8,7 @@ import { Logger } from "@utils/Logger";
 import { isObject } from "@utils/misc";
 import type { PluginNative } from "@utils/types";
 import type { User } from "@vencord/discord-types";
-import { Constants, MediaEngineStore, RestAPI, showToast, SnowflakeUtils, Toasts } from "@webpack/common";
+import { Constants, MediaEngineStore, RestAPI, showToast, SnowflakeUtils } from "@webpack/common";
 
 import { convertClipToMp4 } from "./ffmpeg";
 const logger = new Logger("ClipUpload");
@@ -41,6 +41,11 @@ export interface ClipUploadOptions {
     applicationId?: string;
     remoteClipId?: string;
     eventsTimeline?: unknown;
+    messageReference?: {
+        message_id: string;
+        channel_id: string;
+        guild_id?: string;
+    };
 }
 
 interface AttachmentUploadResponse {
@@ -285,7 +290,8 @@ async function sendClipUpload(uploadFile: File, options: ClipUploadOptions) {
                 clip_participant_ids: options.participants,
                 clip_remote_id: options.remoteClipId,
                 clip_events_timeline: options.eventsTimeline
-            }]
+            }],
+            message_reference: options.messageReference,
         }
     }) as RestResponse;
 
@@ -323,7 +329,7 @@ function shouldRetryWithFFmpeg(error: unknown) {
 
 export async function uploadClipFile(file: File, options: ClipUploadOptions) {
     try {
-        showToast("Checking clip file.", Toasts.Type.MESSAGE);
+        showToast({ text: "Checking clip file." });
 
         const uploadFile = await prepareClipFile(file, options.fileName);
 
@@ -332,15 +338,15 @@ export async function uploadClipFile(file: File, options: ClipUploadOptions) {
         } catch (error) {
             if (!shouldRetryWithFFmpeg(error)) throw error;
 
-            showToast("Converting clip file.", Toasts.Type.MESSAGE);
+            showToast({ text: "Converting clip file." });
             await sendClipUpload(await stampVideoFile(await convertClipToMp4(file, options.fileName), options.fileName), options);
         }
 
-        showToast("Clip uploaded.", Toasts.Type.SUCCESS);
+        showToast({ text: "Clip uploaded.", variant: "success" });
         return true;
     } catch (error) {
         logger.error(error);
-        showToast(getErrorMessage(error), Toasts.Type.FAILURE);
+        showToast({ text: getErrorMessage(error), variant: "critical" });
         return false;
     }
 }

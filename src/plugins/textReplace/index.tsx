@@ -22,16 +22,18 @@ import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
 import { ExpandableSection } from "@components/ExpandableCard";
 import { Flex } from "@components/Flex";
-import { HeadingSecondary } from "@components/Heading";
+import { Heading } from "@components/Heading";
+import { Margins } from "@components/margins";
 import { Paragraph } from "@components/Paragraph";
 import { Span } from "@components/Span";
 import { TooltipContainer } from "@components/TooltipContainer";
 import { Devs, EquicordDevs, SUPPORT_CHANNEL_IDS } from "@utils/constants";
-import { classNameFactory } from "@utils/index";
+import { classNameFactory } from "@utils/css";
 import { Logger } from "@utils/Logger";
 import definePlugin, { OptionType } from "@utils/types";
+import { chooseFile, saveFile } from "@utils/web";
 import { Message } from "@vencord/discord-types";
-import { React, Select, TextInput, UserStore, useState } from "@webpack/common";
+import { React, Select, showToast, TextInput, UserStore, useState } from "@webpack/common";
 
 const cl = classNameFactory("vc-textReplace-");
 
@@ -66,6 +68,7 @@ const makeEmptyRule: () => Rule = () => ({
 });
 
 const makeEmptyRuleArray = () => [makeEmptyRule()];
+const RULE_SETTINGS: ("stringRules" | "regexRules")[] = ["stringRules", "regexRules"];
 
 const settings = definePluginSettings({
     replace: {
@@ -87,6 +90,7 @@ const settings = definePluginSettings({
                         rulesArray={regexRules}
                         isRegex
                     />
+                    <TextReplaceImportExport />
                 </>
             );
         }
@@ -102,6 +106,49 @@ const settings = definePluginSettings({
         description: "Rules for replacing text using regular expressions."
     }
 });
+
+function TextReplaceImportExport() {
+    return (
+        <div>
+            <Heading className={Margins.bottom8}>Import and Export</Heading>
+            <Paragraph>Export your rules as a JSON file or import rules to add them to your existing rules.</Paragraph>
+            <Flex className={cl("import-export-buttons")}>
+                <Button onClick={exportRules}>Export JSON</Button>
+                <Button onClick={importRules}>Import JSON</Button>
+            </Flex>
+        </div>
+    );
+}
+
+function exportRules() {
+    const { stringRules, regexRules } = settings.plain;
+    const json = JSON.stringify({ stringRules, regexRules }, (key, value) => key === "id" ? undefined : value, 4);
+
+    if (IS_DISCORD_DESKTOP) DiscordNative.fileManager.saveWithDialog(new TextEncoder().encode(json), "textreplace-rules.json");
+    else saveFile(new File([json], "textreplace-rules.json", { type: "application/json" }));
+}
+
+async function importRules() {
+    const file = await chooseFile("application/json");
+    if (!file) return;
+
+    try {
+        const data = JSON.parse(await file.text());
+
+        for (const key of RULE_SETTINGS) {
+            const imported = (data[key] ?? [])
+                .filter((rule: Rule) => typeof rule?.find === "string" && rule.find)
+                .map((rule: Rule) => ({ ...makeEmptyRule(), ...rule, id: crypto.randomUUID() }));
+
+            settings.store[key] = [...settings.plain[key].filter(rule => !isEmptyRule(rule)), ...imported, makeEmptyRule()];
+        }
+
+        showToast({ text: "Rules imported successfully.", variant: "success" });
+    } catch (err) {
+        new Logger("TextReplace").error("Failed to import rules:", err);
+        showToast({ text: "Could not import rules. Choose a valid TextReplace JSON file.", variant: "critical" });
+    }
+}
 
 function stringToRegex(str: string) {
     const match = str.match(/^(\/)?(.+?)(?:\/([gimsuyv]*))?$/); // Regex to match regex
@@ -178,9 +225,12 @@ function normalizeRule(rule: Rule) {
     rule.id ??= crypto.randomUUID();
 }
 
+type DropIndicator = { index: number; position: "before" | "after"; };
+
 function TextReplace({ title, description, rulesArray, isRegex = false }: TextReplaceProps) {
     const [searchQuery, setSearchQuery] = useState("");
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+    const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
 
     function onClickRemove(index: number) {
         rulesArray.splice(index, 1);
@@ -209,24 +259,49 @@ function TextReplace({ title, description, rulesArray, isRegex = false }: TextRe
         return acc;
     }, []);
 
-    const handleDrop = (index: number) => (e: React.DragEvent) => {
+    const handleDragOver = (index: number) => (e: React.DragEvent) => {
         e.preventDefault();
-        if (draggedIndex === null || draggedIndex === index || searchQuery) return;
-        const draggedRule = rulesArray.splice(draggedIndex, 1)[0];
-        rulesArray.splice(index, 0, draggedRule);
+        if (draggedIndex === null || searchQuery) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const position = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
+        setDropIndicator(prev =>
+            prev?.index === index && prev.position === position ? prev : { index, position }
+        );
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        if (draggedIndex === null || !dropIndicator || searchQuery) {
+            setDraggedIndex(null);
+            setDropIndicator(null);
+            return;
+        }
+
+        let targetIndex = dropIndicator.index + (dropIndicator.position === "after" ? 1 : 0);
+        if (targetIndex > draggedIndex) targetIndex -= 1;
+
+        if (targetIndex !== draggedIndex) {
+            const draggedRule = rulesArray.splice(draggedIndex, 1)[0];
+            rulesArray.splice(targetIndex, 0, draggedRule);
+        }
+
         setDraggedIndex(null);
+        setDropIndicator(null);
     };
 
     return (
         <>
             <div>
-                <HeadingSecondary>{title}</HeadingSecondary>
+                <Heading className={Margins.bottom8}>{title}</Heading>
                 <Paragraph>{description}</Paragraph>
-                <TextInput
-                    placeholder="Search for a rule..."
-                    value={searchQuery}
-                    onChange={setSearchQuery}
-                />
+                <div className={cl("search-input")}>
+                    <TextInput
+                        placeholder="Search for a rule..."
+                        value={searchQuery}
+                        onChange={setSearchQuery}
+                    />
+                </div>
             </div>
             <Flex flexDirection="column" style={{ gap: "0.5em", paddingBottom: "1.25em" }}>
                 {!filteredRules.length && searchQuery && (
@@ -235,10 +310,16 @@ function TextReplace({ title, description, rulesArray, isRegex = false }: TextRe
                 {filteredRules.map(({ rule, index }) =>
                     <div
                         key={rule.id}
-                        onDragOver={e => e.preventDefault()}
-                        onDrop={handleDrop(index)}
-                        style={{ opacity: draggedIndex === index ? 0.5 : 1 }}
+                        onDragOver={handleDragOver(index)}
+                        onDrop={handleDrop}
+                        style={{ opacity: draggedIndex === index ? 0.5 : 1, position: "relative" }}
                     >
+                        {dropIndicator?.index === index && dropIndicator.position === "before" && (
+                            <div className={cl("drop-indicator")} style={{ top: 0 }} />
+                        )}
+                        {dropIndicator?.index === index && dropIndicator.position === "after" && (
+                            <div className={cl("drop-indicator")} style={{ bottom: 0 }} />
+                        )}
                         <ExpandableSection
                             renderContent={() => (
                                 <>
@@ -293,7 +374,10 @@ function TextReplace({ title, description, rulesArray, isRegex = false }: TextRe
                                     setDraggedIndex(index);
                                     e.dataTransfer.setData("text/plain", index.toString());
                                 }}
-                                onDragEnd={() => setDraggedIndex(null)}
+                                onDragEnd={() => {
+                                    setDraggedIndex(null);
+                                    setDropIndicator(null);
+                                }}
                                 style={{ cursor: searchQuery ? "default" : "grab", flex: 1 }}
                             >
                                 <Paragraph weight="medium" size="md">
@@ -327,7 +411,7 @@ function TextReplaceTesting() {
 
     return (
         <div>
-            <HeadingSecondary>Rule Tester</HeadingSecondary>
+            <Heading className={Margins.bottom8}>Rule Tester</Heading>
             <Flex flexDirection="column" gap={6}>
                 <TextInput placeholder="Type a message to test rules on" onChange={setValue} />
                 <TextInput placeholder="Message with rules applied" editable={false} value={applyRules(value, "allMessages")} style={{ opacity: 0.7 }} />
@@ -388,7 +472,7 @@ export default definePlugin({
     description: "Replace text in your messages. You can find pre-made rules in the #textreplace-rules channel in Vencord's Server",
     dependencies: ["MessagePopoverAPI"],
     tags: ["Chat", "Customisation", "Utility"],
-    authors: [Devs.AutumnVN, Devs.TheKodeToad, EquicordDevs.Etorix, EquicordDevs.Ape],
+    authors: [Devs.AutumnVN, Devs.TheKodeToad, EquicordDevs.Etorix, EquicordDevs.Ape, EquicordDevs.rot],
     isModified: true,
     settings,
     modifyIncomingMessage,

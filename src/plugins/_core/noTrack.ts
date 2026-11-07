@@ -26,9 +26,16 @@ import { Flux, FluxDispatcher } from "@webpack/common";
 const settings = definePluginSettings({
     disableAnalytics: {
         type: OptionType.BOOLEAN,
-        description: "Disable Discord's tracking (analytics/'science')",
+        description: "Block Discord's tracking analytics. Disable this if you want badges to track your progress (eg: hours streamed).",
         default: true,
         restartNeeded: true
+    },
+    disableStackDumping: {
+        type: OptionType.BOOLEAN,
+        description: "Print a native stack trace to the console when Discord crashes. Requires full restart.",
+        default: false,
+        restartNeeded: true,
+        target: "DESKTOP"
     }
 });
 

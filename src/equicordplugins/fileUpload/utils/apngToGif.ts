@@ -6,7 +6,7 @@
 
 /*
  * FFmpeg loading and worker code adapted from the MoreStickers plugin
- * by Leko and Arjix (src/equicordplugins/moreStickers/utils.tsx)
+ * by Leko and Arjix (src/equicordplugins/moreStickers.desktop/utils.tsx)
  */
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
@@ -34,12 +34,16 @@ async function loadFFmpeg(): Promise<FFmpeg> {
         const classWorkerBlob = new Blob([(new TextEncoder()).encode(classWorkerRaw)], { type: "text/javascript" });
         const classWorkerUrl = URL.createObjectURL(classWorkerBlob);
 
-        await ffmpeg.load({
-            coreURL: `${baseURL}/ffmpeg-core.js`,
-            wasmURL: `${baseURL}/ffmpeg-core.wasm`,
-            workerURL: `${baseURL}/ffmpeg-core.worker.js`,
-            classWorkerURL: classWorkerUrl,
-        });
+        try {
+            await ffmpeg.load({
+                coreURL: `${baseURL}/ffmpeg-core.js`,
+                wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+                workerURL: `${baseURL}/ffmpeg-core.worker.js`,
+                classWorkerURL: classWorkerUrl,
+            });
+        } finally {
+            URL.revokeObjectURL(classWorkerUrl);
+        }
 
         ffmpegLoaded = true;
         console.log("[FileUpload] FFmpeg loaded");

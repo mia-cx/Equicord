@@ -9,7 +9,8 @@ import type { JSX } from "react";
 
 import { getQuestifySettings, useQuestifySettings } from "../settings/access";
 import { resetDangerousSettings } from "../settings/dangerous";
-import { autoCompleteQuestTaskTypes, defaultAutoCompleteQuestTypes, isDesktopCompatible } from "../settings/def";
+import { autoCompleteQuestTaskTypes, defaultAutoCompleteQuestTypes, isAutoCompleteCompatible } from "../settings/def";
+import { validateIgnoredQuests } from "../settings/ignoredQuests";
 import { Alerts, q } from "../utils/ui";
 import { ManaButton, type ManaSelectOption, SettingsCard, SettingsDescription, SettingsHeader, SettingsNotice, SettingsParagraph, SettingsSelect, SettingsSubheader, SettingsSubtleSwitch } from "./shared";
 
@@ -23,10 +24,13 @@ type QuestDisableSettingKey =
     | "disableSponsoredBanner";
 
 type QuestModifySettingKey =
+    | "autoEnrollQuests"
+    | "autoCompleteQuests"
     | "autoCompleteQuestsSimultaneously"
     | "resumeInterruptedQuests"
     | "completeVideoQuestsQuicker"
     | "preventVideoQuestsPausing"
+    | "hideNonAutoCompletableQuests"
     | "makeMobileVideoQuestsDesktopCompatible";
 
 interface QuestDisableOption {
@@ -90,35 +94,8 @@ const autoCompleteQuestTypeManaOptions: ManaSelectOption[] = autoCompleteQuestTy
     id: String(value),
     label,
     value: String(value),
-    disabled: !isDesktopCompatible(value),
+    disabled: !isAutoCompleteCompatible(value),
 }));
-
-interface SettingsAllowDangerousButtonProps {
-    allowed: boolean;
-    disabled?: boolean;
-    onClick?: (e: React.MouseEvent) => void;
-}
-
-function SettingsAllowDangerousButton({
-    allowed,
-    disabled,
-    onClick,
-}: SettingsAllowDangerousButtonProps): JSX.Element {
-    return (
-        <div className={q("settings-button", "allow-dangerous-button")}>
-            <ManaButton
-                text={allowed
-                    ? "Reset and disallow changing dangerous settings..."
-                    : "Allow changing dangerous settings..."}
-                variant={allowed ? "critical-secondary" : "critical-primary"}
-                fullWidth={true}
-                disabled={disabled}
-                onClick={onClick}
-                size="sm"
-            />
-        </div>
-    );
-}
 
 export function QuestFeaturesSetting(): JSX.Element {
     const questFeatures = useQuestifySettings([
@@ -133,10 +110,14 @@ export function QuestFeaturesSetting(): JSX.Element {
         "resumeInterruptedQuests",
         "allowChangingDangerousSettings",
         "makeMobileVideoQuestsDesktopCompatible",
+        "usedKonamiCode",
+        "autoEnrollQuests",
+        "autoCompleteQuests",
         "autoCompleteQuestsSimultaneously",
         "autoCompleteQuestTypes",
         "completeVideoQuestsQuicker",
         "preventVideoQuestsPausing",
+        "hideNonAutoCompletableQuests",
     ]);
 
     const selectedDisableValues = disableFeatureOptions
@@ -144,7 +125,7 @@ export function QuestFeaturesSetting(): JSX.Element {
         .map(({ key }) => key);
 
     const selectedAutoCompleteQuestTypeValues = autoCompleteQuestTypeOptions
-        .filter(({ value }) => isDesktopCompatible(value) && questFeatures.autoCompleteQuestTypes[value] === true)
+        .filter(({ value }) => isAutoCompleteCompatible(value) && questFeatures.autoCompleteQuestTypes[value] === true)
         .map(({ value }) => String(value));
 
     function updateDisableValue(value: string | string[] | null) {
@@ -172,12 +153,13 @@ export function QuestFeaturesSetting(): JSX.Element {
 
         for (const { value: questType } of autoCompleteQuestTypeOptions) {
             const nextValue = selectedValues.has(String(questType))
-                && isDesktopCompatible(questType);
+                && isAutoCompleteCompatible(questType);
 
             nextAutoCompleteQuestTypes[questType] = nextValue;
         }
 
         getQuestifySettings().autoCompleteQuestTypes = nextAutoCompleteQuestTypes;
+        validateIgnoredQuests();
     }
 
     function updateDisableEverything(checked: boolean) {
@@ -216,6 +198,10 @@ export function QuestFeaturesSetting(): JSX.Element {
 
     function updateModifyValue(key: QuestModifySettingKey, checked: boolean) {
         getQuestifySettings()[key] = checked;
+
+        if (key === "hideNonAutoCompletableQuests" || key === "makeMobileVideoQuestsDesktopCompatible") {
+            validateIgnoredQuests();
+        }
     }
 
     return (
@@ -257,32 +243,50 @@ export function QuestFeaturesSetting(): JSX.Element {
             <SettingsSubheader> Modify Features </SettingsSubheader>
             <SettingsNotice className={["notice-card-red", questFeatures.disableQuestsEverything ? "dimmed-settings-item" : undefined, questFeatures.allowChangingDangerousSettings ? undefined : "notice-card-solo", "no-bottom-margin"].filter(c => c !== undefined)}>
                 <SettingsParagraph>
-                    Discord has implemented a Quest Ban system which will temporarily or permanently limit your access to completing Quests and claiming their rewards if you are found to be completing them through unofficial means. Modifying the completion of Quests is against their <a href="https://discord.com/safety/platform-manipulation-policy-explainer" target="_blank" rel="noreferrer">Terms of Service</a>.
+                    Discord is known to punish users of scripts or plugins that modify the completion of Quests. Modifying the completion of Quests is against Discord's <a href="https://discord.com/safety/platform-manipulation-policy-explainer" target="_blank" rel="noreferrer">Terms of Service</a>.
                 </SettingsParagraph>
                 <br />
                 <SettingsParagraph>
-                    The punishment appears limited to loss of access to Quests and their rewards, but Discord may escalate at any time.
+                    The punishment consists of a temporary or permanent loss of access to Quests and their rewards. <strong>The punishment also consists of an account standing violation which lasts 2 years per violation.</strong>
                 </SettingsParagraph>
                 <br />
                 <SettingsParagraph>
-                    Due to the various methods Discord uses to track users, there's no way to realistically evade detection. If you proceed, understand that Discord likely will detect it at some point.
+                    Due to the various methods Discord uses to track users, there's no way to realistically evade detection. If you proceed, understand that Discord likely will detect your use at some point.
                 </SettingsParagraph>
                 <br />
                 <SettingsParagraph>
                     Use the following toggle to access potentially dangerous settings at your own risk.
                 </SettingsParagraph>
-                <SettingsAllowDangerousButton
-                    allowed={questFeatures.allowChangingDangerousSettings}
-                    disabled={questFeatures.disableQuestsEverything}
-                    onClick={() => updateDangerousAccess(!questFeatures.allowChangingDangerousSettings)}
-                />
-                {questFeatures.allowChangingDangerousSettings && <>
+                <div className={q("settings-button", "allow-dangerous-button")}>
+                    <ManaButton
+                        text={questFeatures.allowChangingDangerousSettings
+                            ? "Reset and disallow changing dangerous settings..."
+                            : "Allow changing dangerous settings..."}
+                        variant={questFeatures.allowChangingDangerousSettings ? "critical-secondary" : "critical-primary"}
+                        fullWidth={true}
+                        disabled={questFeatures.disableQuestsEverything}
+                        onClick={() => updateDangerousAccess(!questFeatures.allowChangingDangerousSettings)}
+                        size="sm"
+                    />
+                </div>
+                <div style={{ display: questFeatures.allowChangingDangerousSettings ? undefined : "none" }}>
+                    <SettingsSubtleSwitch
+                        disabled={questFeatures.disableQuestsEverything || !questFeatures.allowChangingDangerousSettings}
+                        checked={questFeatures.hideNonAutoCompletableQuests}
+                        label="Hide Non Auto-Completable Quests:"
+                        onChange={checked => updateModifyValue("hideNonAutoCompletableQuests", checked)}
+                        topSpacing="10"
+                        bottomSpacing="5"
+                        tooltip={{
+                            position: "top",
+                            text: "Hide incomplete Quests with an unclaimed or ignored status when no auto-complete task is supported on this platform and enabled in the Quest types dropdown. Claimed, expired, and completed Quests are exempt. Use the Status Order Hidden options to hide those Quests."
+                        }}
+                    />
                     <SettingsSubtleSwitch
                         disabled={questFeatures.disableQuestsEverything || !questFeatures.allowChangingDangerousSettings}
                         checked={questFeatures.completeVideoQuestsQuicker}
                         label="Accelerate Video Quest auto-completion:"
                         onChange={checked => updateModifyValue("completeVideoQuestsQuicker", checked)}
-                        topSpacing="10"
                         bottomSpacing="5"
                         tooltip={{
                             position: "top",
@@ -341,9 +345,36 @@ export function QuestFeaturesSetting(): JSX.Element {
                             text: "This setting will automatically resume any interrupted auto-completions caused by reloads or restarts, including requeuing Quests which had yet to start auto-completing but had been queued."
                         }}
                     />
+                    {questFeatures.usedKonamiCode === true && (
+                        <>
+                            <SettingsSubtleSwitch
+                                disabled={questFeatures.disableQuestsEverything || !questFeatures.allowChangingDangerousSettings}
+                                checked={questFeatures.autoCompleteQuests}
+                                label="Automatically process compatible Quests for auto-completion:"
+                                onChange={checked => updateModifyValue("autoCompleteQuests", checked)}
+                                bottomSpacing="5"
+                                tooltip={{
+                                    position: "top",
+                                    text: "Complete eligible, unclaimed, unignored, and unexpired Quests included by your reward and Quest type filters that are detected while Discord is running. Only supported task types enabled below are included."
+                                        + "\n\nAutomatically enrolls in compatible Quests before queuing them for auto-completion. Waits for known rate-limit cooldowns. Stops on unknown errors, rate limits without a retry delay, or repeated enrollment failures."
+                                }}
+                            />
+                            <SettingsSubtleSwitch
+                                disabled={questFeatures.disableQuestsEverything || !questFeatures.allowChangingDangerousSettings}
+                                checked={questFeatures.autoEnrollQuests}
+                                label="Automatically enroll in compatible Quests."
+                                onChange={checked => updateModifyValue("autoEnrollQuests", checked)}
+                                bottomSpacing="5"
+                                tooltip={{
+                                    position: "top",
+                                    text: "Enroll in eligible, unclaimed, unignored, and unexpired Quests included by your reward and Quest type filters that are detected while Discord is running."
+                                        + "\n\nEnrolls in Quests without queuing them for auto-completion. Waits for known rate-limit cooldowns. Stops on unknown errors, rate limits without a retry delay, or repeated enrollment failures."
+                                }}
+                            />
+                        </>
+                    )}
                     <SettingsSelect
                         label="Auto-complete specific Quest types:"
-                        labelClassName="margin-top-9"
                         wrapTags={true}
                         options={autoCompleteQuestTypeManaOptions}
                         value={selectedAutoCompleteQuestTypeValues}
@@ -357,14 +388,13 @@ export function QuestFeaturesSetting(): JSX.Element {
                             wider: true,
                             text: "Watch Video on Mobile Quests will only work on mobile Quests which are enrollable on desktop. If a Quest is locked to enrollment on mobile, you must first enroll in it on your mobile device before returning to desktop and refreshing your Quests."
                                 + "\n\nAll video related Quests usually send a stack trace with the progress reports. This means Discord would know exactly which functions were called, and can therefore verify that their own functions initiated the progress. Questify erases this stack trace, but the absence of it will be just as telling as its presence."
-                                + "\n\nPlay on Desktop, Play on PlayStation, Play on Xbox, and Play Activity Quests are only available on official desktop clients due to a limitation imposed by Discord. 3rd party clients such as web extensions, Vesktop, Equibop, and others, do not support auto-completing these Quest types."
+                                + "\n\nPlay on Desktop, Play on PlayStation, Play on Xbox, Play Activity, and Achievement in Activity Quests are only available on official desktop clients due to a limitation imposed by Discord. 3rd party clients such as web extensions, Vesktop, Equibop, and others, do not support auto-completing these Quest types."
                                 + "\n\nAll game related Quests usually send a game fingerprint with the heartbeat reports. This means Discord can use data from tens of thousands of users to determine whether other users are likely using a real game or are emulating the executable. There is no reasonable method to spoof this value, so Questify leaves it blank, but the absence of it will be just as telling as poorly spoofing the value."
-                                + "\n\nAchievement in Activity Quests can only be auto-completed by completing them immediately. This method may be patched at any time."
-                                + "\n\nAuto-completing Quests is done by clicking their respective buttons on the Quests page. Quests will be auto-completed in the order they were queued, unless the simultaneous completion setting is enabled above."
+                                + "\n\nAuto-completion starts from Quest buttons on the Quests page or automatic processing. Quests are completed in the order they were queued, unless simultaneous completion is enabled above."
                                 + "\n\nAuto-completing Quests is the riskiest dangerous setting available. Enable it at your own risk."
                         }}
                     />
-                </>}
+                </div>
             </SettingsNotice>
         </SettingsCard>
     );

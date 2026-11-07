@@ -54,7 +54,9 @@ export class MessageStore extends FluxStore {
     /** @see {@link ChannelMessages} */
     getMessages(channelId: string): ChannelMessages;
     hasCurrentUserSentMessage(channelId: string): boolean;
-    hasCurrentUserSentMessageSinceAppStart(channelId: string): boolean;
+    hasCurrentUserSentMessageSinceAppStart(): boolean;
+    hasCurrentUserSentWaveBlockingMessage(channelId: string): boolean;
+    getAutomodRemovalNotice(messageId: string): unknown;
     hasPresent(channelId: string): boolean;
     isLoadingMessages(channelId: string): boolean;
     isReady(channelId: string): boolean;

@@ -23,10 +23,11 @@ interface UserAffinitiesResponse {
 export class UserAffinitiesStore extends FluxStore {
     compare(firstUserId: string, secondUserId: string): number;
     compareByDmProbability(firstUserId: string, secondUserId: string): number;
+    getDevToolsOverride(): UserAffinity | null;
     getState(): UserAffinitiesResponse;
     getUserAffinities(): UserAffinity[];
     getUserAffinitiesMap(): Map<string, UserAffinity>;
-    getUserAffinity(userId: string): UserAffinity;
+    getUserAffinity(userId: string): UserAffinity | undefined;
     isFetching(): boolean;
     isHighlyAffinedVCUser(userId: string): boolean;
     shouldFetch(): boolean;

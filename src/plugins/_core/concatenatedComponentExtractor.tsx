@@ -26,12 +26,12 @@ export default definePlugin({
         {
             find: /="ltr",orientation:\i="vertical"[^}]+?customTheme:/,
             replacement: {
-                match: /(?=function (\i)\(\i,\i,\i\)\{.{0,20}?return \i\.forwardRef\(function\(\i,\i\)\{let\{[^}]+?="ltr",orientation:)/,
+                match: /(?=function (\i)\(\i,\i,\i\)\{.{0,20}?return function\(\i\)\{let\{[^}]+?="ltr",orientation:)/,
                 replace: "$self.setCreateScroller($1);"
             }
         },
         {
-            find: '("UserProfileModalV2EditingPanel")',
+            find: "UserProfileModalV2EditingPanel",
             replacement: [
                 {
                     match: /function (\i).{0,50}showNitroIcon:.{0,500}\}\),\i\]\}\)\}/,

@@ -14,6 +14,8 @@ import { makeRange, OptionType } from "@utils/types";
 import { SearchableSelect, useState } from "@webpack/common";
 import { JSX } from "react";
 
+import { Bookmarks } from "./types";
+
 interface DynamicDropdownSettingOption {
     label: string;
     value: string;
@@ -31,7 +33,7 @@ function AnimationSettings(): JSX.Element {
         { label: "Plus Button Pulse", value: "plus-pulse", selected: settings.store.animationPlusPulse },
         { label: "Mention Badge Glow", value: "mention-glow", selected: settings.store.animationMentionGlow },
         { label: "Compact Mode Expansion", value: "compact-expand", selected: settings.store.animationCompactExpand },
-        { label: "Selected Tab Blue Border", value: "selected-border", selected: settings.store.animationSelectedBorder },
+        { label: "Selected Tab Accent Border", value: "selected-border", selected: settings.store.animationSelectedBorder },
         { label: "Selected Tab Background Color", value: "selected-background", selected: settings.store.animationSelectedBackground },
         { label: "Tab Shadow Effects", value: "tab-shadows", selected: settings.store.animationTabShadows },
         { label: "Tab Repositioning (smooth position changes)", value: "tab-positioning", selected: settings.store.animationTabPositioning },
@@ -139,10 +141,11 @@ export const settings = definePluginSettings({
         type: OptionType.COMPONENT,
         default: {}
     },
-    noPomeloNames: {
-        description: "Use display names instead of usernames for DM's",
-        type: OptionType.BOOLEAN,
-        default: false
+    bookmarks: {
+        type: OptionType.CUSTOM,
+        description: "Saved bookmarks per account",
+        default: {} as Record<string, Bookmarks>,
+        hidden: true
     },
     showStatusIndicators: {
         description: "Show status indicators for DM's",

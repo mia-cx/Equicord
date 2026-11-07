@@ -9,11 +9,11 @@ import "./style.css";
 import { isPluginEnabled } from "@api/PluginManager";
 import { definePluginSettings, migratePluginSetting } from "@api/Settings";
 import { Divider } from "@components/Divider";
-import { HeadingSecondary } from "@components/Heading";
+import { Heading } from "@components/Heading";
 import { Notice } from "@components/Notice";
 import decor from "@plugins/decor";
+import { Devs, EquicordDevs } from "@utils/constants";
 import { classNameFactory } from "@utils/css";
-import { Devs, EquicordDevs } from "@utils/index";
 import definePlugin, { OptionType } from "@utils/types";
 
 migratePluginSetting("Declutter", "removeShopAboveDms", "removeShopAboveDM");
@@ -32,7 +32,8 @@ export const settings = definePluginSettings({
     },
     removeAvatarDecoration: {
         type: OptionType.BOOLEAN,
-        description: "Remove avatar decorations. This is/will be disabled if Decor is enabled.",
+        description:
+            "Remove avatar decorations. This is/will be disabled if Decor is enabled.",
         default: false,
         disabled: () => isPluginEnabled("Decor"),
         restartNeeded: true,
@@ -58,6 +59,12 @@ export const settings = definePluginSettings({
     removeClanTag: {
         type: OptionType.BOOLEAN,
         description: "Remove clan tags.",
+        default: true,
+        restartNeeded: true,
+    },
+    removeDisplayNameStyles: {
+        type: OptionType.BOOLEAN,
+        description: "Remove animated/styled display names in the member list.",
         default: true,
         restartNeeded: true,
     },
@@ -150,9 +157,9 @@ function SectionSeparator(title: string) {
     return (
         <div className={cl("section-separator")}>
             <Divider />
-            <HeadingSecondary className={cl("section-title")}>
+            <Heading tag="h3" className={cl("section-title")}>
                 {title}
-            </HeadingSecondary>
+            </Heading>
         </div>
     );
 }
@@ -164,7 +171,8 @@ export default definePlugin({
     tags: ["Appearance", "Customisation"],
     authors: [EquicordDevs.Leon135, Devs.prism, Devs.Kyuuhachi, Devs.SomeAspy],
     start() {
-        if (isPluginEnabled("Decor") && settings.store.removeAvatarDecoration) settings.store.removeAvatarDecoration = false;
+        if (isPluginEnabled("Decor") && settings.store.removeAvatarDecoration)
+            settings.store.removeAvatarDecoration = false;
     },
     settings,
     patches: [
@@ -184,7 +192,9 @@ export default definePlugin({
                 match: /(?<=\{avatarDecoration:.{0,40}?)(void 0!==\i\?\i:)\i(?=\)?,canAnimate:)/,
                 replace: "$1null",
             },
-            predicate: () => settings.store.removeAvatarDecoration && !isPluginEnabled(decor.name),
+            predicate: () =>
+                settings.store.removeAvatarDecoration &&
+                !isPluginEnabled(decor.name),
         },
         {
             // Avatar decoration on dms list
@@ -193,7 +203,9 @@ export default definePlugin({
                 match: /null==\i\|\|\i\?null:\(0,\i\.jsxs?\)\("img",\{className:\i\.\i,src:\i,alt:" ","aria-hidden":!0\}\)/,
                 replace: "null",
             },
-            predicate: () => settings.store.removeAvatarDecoration && !isPluginEnabled(decor.name),
+            predicate: () =>
+                settings.store.removeAvatarDecoration &&
+                !isPluginEnabled(decor.name),
         },
         // User Area
         {
@@ -202,7 +214,9 @@ export default definePlugin({
                 {
                     match: /((\i)=\i\?\.avatarDecoration,\i=)\(0,\i\.\i\)\(\2\)/,
                     replace: "$1null",
-                    predicate: () => settings.store.removeAvatarDecoration && !isPluginEnabled(decor.name),
+                    predicate: () =>
+                        settings.store.removeAvatarDecoration &&
+                        !isPluginEnabled(decor.name),
                 },
                 {
                     match: /(iconForeground:null!=\i\?\i\.\i:void 0,nameplate:)\i/g,
@@ -210,7 +224,7 @@ export default definePlugin({
                     predicate: () => settings.store.removeNameplate,
                 },
                 {
-                    match: /let\{ref:\i,speaking:\i,voiceDb:/,
+                    match: /let\{ref:\i,speaking:\i,playingSoundboard:\i,voiceDb:/,
                     replace: "arguments[0].nameplate=null;$&",
                     predicate: () => settings.store.removeNameplate,
                 },
@@ -220,7 +234,7 @@ export default definePlugin({
             // Nameplate
             find: ".MINI_PREVIEW,[",
             replacement: {
-                match: /function \i\((\i)\)\{(?=let.{1,5}\{nameplate:\i,)/,
+                match: /function \i\((\i)\)\{(?=let.{0,5}\{nameplate:\i,)/,
                 replace:
                     '$&if($1.placement!=="preview"&&$1.placement!=="mini_preview")return null;',
             },
@@ -239,10 +253,29 @@ export default definePlugin({
             // Clan tag
             find: ".GuildFeatures.GUILD_TAGS)",
             replacement: {
-                match: /(?<=\.profile\?\.badge.{0,50}\i\)\{)/,
-                replace: "return false;",
+                match: /return null!=\i&&null!=\i&&!\i\}/,
+                replace: "return false}",
             },
             predicate: () => settings.store.removeClanTag,
+        },
+        {
+            // Display name styles in member list
+            find: "#{intl::GUILD_OWNER}),children:",
+            replacement: [
+                {
+                    match: /(\i)=\(0,\i\.\i\)\(\{userId:\i\?\.id,guildId:\i\}\)/,
+                    replace: "$1=null",
+                },
+                {
+                    match: /animateRoleGradient:\i/,
+                    replace: "animateRoleGradient:false",
+                },
+                {
+                    match: /colorStrings:\i,/,
+                    replace: "",
+                },
+            ],
+            predicate: () => settings.store.removeDisplayNameStyles,
         },
         {
             // Always show username
@@ -325,12 +358,12 @@ export default definePlugin({
                     predicate: () => settings.store.removeShopAboveDms,
                 },
                 {
-                    match: /\.QUEST_HOME\},"quests"\)/,
+                    match: /\.QUEST_HOME\)\},"quests"\)/,
                     replace: "$&&&undefined",
                     predicate: () => settings.store.removeQuestsAboveDms,
                 },
                 {
-                    match: /\.APPLICATION_LIBRARY\},"library"\)/,
+                    match: /\.APPLICATION_LIBRARY\)\},"library"\)/,
                     replace: "$&&&undefined",
                     predicate: () => settings.store.removeLibraryAboveDms,
                 },

@@ -7,6 +7,7 @@
 import { NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { definePluginSettings, migratePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
+import { GifIcon, RemixIcon } from "@components/Icons";
 import { EquicordDevs } from "@utils/constants";
 import { classNameFactory } from "@utils/css";
 import { getCurrentChannel } from "@utils/discord";
@@ -73,12 +74,12 @@ const settings = definePluginSettings({
     },
     maxWidth: {
         type: OptionType.NUMBER,
-        default: 1280,
+        default: 1024,
         description: "Maximum auto-fit width."
     },
     maxHeight: {
         type: OptionType.NUMBER,
-        default: 720,
+        default: 576,
         description: "Maximum auto-fit height."
     },
 });
@@ -97,6 +98,8 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props) =
         <Menu.MenuItem
             id={GIFMAKER_ID}
             label="Make GIF"
+            icon={GifIcon}
+            leadingAccessory={{ type: "icon", icon: GifIcon }}
             action={() => openModal(modalProps => (
                 <GifMakerModal url={info.url} isVideo={info.isVideo} sourceWidth={info.sourceWidth} sourceHeight={info.sourceHeight} {...modalProps} />
             ))}
@@ -116,7 +119,24 @@ const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props) => 
         <Menu.MenuItem
             id={GIFMAKER_ID}
             label="Make GIF"
+            icon={GifIcon}
+            leadingAccessory={{ type: "icon", icon: GifIcon }}
             action={() => openModal(modalProps => <GifMakerModal url={info.url} isVideo={info.isVideo} sourceWidth={info.sourceWidth} sourceHeight={info.sourceHeight} {...modalProps} />)}
+        />
+    );
+};
+
+const gifPickerContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
+    if (!props?.src) return;
+
+    children.push(
+        <Menu.MenuItem
+            id="gif-maker-edit"
+            key="gif-maker-edit"
+            label="Edit GIF"
+            icon={RemixIcon}
+            leadingAccessory={{ type: "icon", icon: RemixIcon }}
+            action={() => openGifMakerFromItem(props)}
         />
     );
 };
@@ -257,10 +277,7 @@ function GifMakerModal({ url, isVideo, sourceWidth, sourceHeight, ...props }: Re
 
             const { current } = optionsRef;
             createGif(url, isVideo, current).then(blob => {
-                if (gen !== generationRef.current) {
-                    URL.revokeObjectURL(URL.createObjectURL(blob));
-                    return;
-                }
+                if (gen !== generationRef.current) return;
                 setError(null);
                 setGifBlob(blob);
                 setPreviewUrl(prev => {
@@ -277,7 +294,7 @@ function GifMakerModal({ url, isVideo, sourceWidth, sourceHeight, ...props }: Re
         }, 300);
 
         return () => clearTimeout(timer);
-    }, [JSON.stringify(options.captionMode), options.captionText, options.captionSize, options.fontFamily, options.bubbleTipX, options.bubbleTipY, options.bubbleTipBase, options.width, options.height]);
+    }, [options.captionMode, options.captionText, options.captionSize, options.fontFamily, options.bubbleTipX, options.bubbleTipY, options.bubbleTipBase, options.width, options.height]);
 
     const handlePreviewClick = (e: React.MouseEvent<HTMLImageElement>) => {
         if (options.captionMode !== "speechbubble") return;
@@ -453,7 +470,7 @@ function GifMakerModal({ url, isVideo, sourceWidth, sourceHeight, ...props }: Re
 }
 
 function openGifMakerFromItem(item) {
-    const directUrl = typeof item.src === "string" ? item.src : null;
+    const directUrl = typeof item.url === "string" ? item.url : typeof item.src === "string" ? item.src : null;
 
     const candidates = collectCandidateUrls(item);
     const adjustedCandidates = new Set<string>();
@@ -485,22 +502,11 @@ export default definePlugin({
     managedStyle: css,
     contextMenus: {
         "message": messageContextMenuPatch,
-        "image-context": imageContextMenuPatch
+        "image-context": imageContextMenuPatch,
+        "gif-picker": gifPickerContextMenuPatch
     },
 
     start() {
         void fetchAllGoogleFonts();
-    },
-
-    gifPickerContextMenu(instance, _e: React.MouseEvent) {
-        if (!instance?.props?.item?.src) return null;
-        return (
-            <Menu.MenuItem
-                id="gif-maker-edit"
-                key="gif-maker-edit"
-                label="Edit GIF"
-                action={() => openGifMakerFromItem(instance?.props?.item)}
-            />
-        );
     },
 });

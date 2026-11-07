@@ -22,14 +22,15 @@ import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/Co
 import { definePluginSettings, migratePluginSettings } from "@api/Settings";
 import { CodeBlock } from "@components/CodeBlock";
 import ErrorBoundary from "@components/ErrorBoundary";
-import { HeadingSecondary } from "@components/Heading";
+import { Heading } from "@components/Heading";
 import { Margins } from "@components/margins";
 import { Devs } from "@utils/constants";
 import { copyWithToast, getCurrentGuild, getIntlMessage } from "@utils/discord";
 import { isTruthy } from "@utils/guards";
+import { classes } from "@utils/misc";
 import definePlugin, { IconComponent, OptionType } from "@utils/types";
 import { Message } from "@vencord/discord-types";
-import { ChannelStore, GuildRoleStore, Menu, Modal, openModal, UserProfileStore } from "@webpack/common";
+import { GuildRoleStore, Menu, Modal, openModal, UserProfileStore } from "@webpack/common";
 import { MouseEventHandler } from "react";
 
 const CopyRawIcon: IconComponent = ({ height = 20, width = 20, className }) => {
@@ -48,30 +49,58 @@ const CopyRawIcon: IconComponent = ({ height = 20, width = 20, className }) => {
     );
 };
 
-function sortObject<T extends object>(obj: T): T {
-    return Object.fromEntries(Object.entries(obj).sort(([k1], [k2]) => k1.localeCompare(k2))) as T;
+// We can't use structuredClone because some objects may contain methods, which cause a DataCloneError.
+function cloneObject<T>(obj: T): T {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function sortObject<T>(obj: T): T {
+    if (!settings.store.sortKeys) return obj;
+
+    if (Array.isArray(obj)) {
+        return obj.map(sortObject) as T;
+    }
+
+    if (obj !== null && typeof obj === "object") {
+        return Object.fromEntries(
+            Object.entries(obj)
+                .sort(([k1], [k2]) => k1.localeCompare(k2))
+                .map(([key, value]) => [key, sortObject(value)])
+        ) as T;
+    }
+
+    return obj;
+}
+
+const deleteProperties = (obj: object, keys: string[]) => keys.forEach(key => delete obj[key]);
+
+function redactUser(data: object) {
+    if (settings.store.stripSensitiveData) {
+        deleteProperties(data, [
+            "email",
+            "phone",
+            "storeCountry",
+            "personalConnectionId"
+        ]);
+    }
+
+    return data;
 }
 
 function cleanMessage(msg: Message) {
-    const clone = sortObject(JSON.parse(JSON.stringify(msg)));
-    for (const key of [
-        "email",
-        "phone",
-        "mfaEnabled",
-        "personalConnectionId"
-    ]) delete clone.author[key];
+    msg = cloneObject(msg);
+    redactUser(msg.author);
 
     // message logger added properties
-    const cloneAny = clone as any;
-    delete cloneAny.editHistory;
-    delete cloneAny.deleted;
-    delete cloneAny.firstEditTimestamp;
-    cloneAny.attachments?.forEach(a => delete a.deleted);
+    deleteProperties(msg, ["editHistory", "deleted", "firstEditTimestamp"]);
+    msg.attachments?.forEach(a => delete (a as any).deleted);
 
-    return clone;
+    return msg;
 }
 
-function openViewRawModal(json: string, type: string, msgContent?: string) {
+function openViewRawModal(data: object, type: string, msgContent?: string) {
+    const json = JSON.stringify(sortObject(data), null, 4);
+
     openModal(props => (
         <ErrorBoundary>
             <Modal
@@ -93,9 +122,9 @@ function openViewRawModal(json: string, type: string, msgContent?: string) {
             >
                 {!!msgContent && (
                     <>
-                        <HeadingSecondary>Message Content</HeadingSecondary>
+                        <Heading className={Margins.bottom8}>Message Content</Heading>
                         <CodeBlock className="vc-viewRaw-codeBlock" content={msgContent} lang="" />
-                        <HeadingSecondary className={Margins.top16}>Message Data</HeadingSecondary>
+                        <Heading className={classes(Margins.top16, Margins.bottom8)}>Message Data</Heading>
                     </>
                 )}
                 <CodeBlock className="vc-viewRaw-codeBlock" content={json} lang="json" />
@@ -104,12 +133,7 @@ function openViewRawModal(json: string, type: string, msgContent?: string) {
     ));
 }
 
-function openViewRawModalMessage(msg: Message) {
-    msg = cleanMessage(msg);
-    const msgJson = JSON.stringify(msg, null, 4);
-
-    return openViewRawModal(msgJson, "Message", msg.content);
-}
+const openViewRawModalMessage = (msg: Message) => openViewRawModal(cleanMessage(msg), "Message", msg.content);
 
 const settings = definePluginSettings({
     clickMethod: {
@@ -124,6 +148,16 @@ const settings = definePluginSettings({
         description: "Show in message context menu",
         type: OptionType.BOOLEAN,
         default: false
+    },
+    sortKeys: {
+        description: "Alphabetically sort the keys of the raw data.",
+        type: OptionType.BOOLEAN,
+        default: true
+    },
+    stripSensitiveData: {
+        description: "Remove sensitive data from the raw data, such as your email and phone number.",
+        type: OptionType.BOOLEAN,
+        default: true
     }
 });
 
@@ -139,7 +173,9 @@ function MakeContextCallback(name: "Guild" | "Role" | "User" | "Channel" | "Mess
         const id = `vc-view-${name.toLowerCase()}-raw`;
         const action = isMessage
             ? () => openViewRawModalMessage(value)
-            : () => openViewRawModal(JSON.stringify(value, null, 4), name);
+            : name === "User"
+                ? () => openViewRawModal(redactUser(cloneObject(value)), name)
+                : () => openViewRawModal(value, name);
 
         const devContainer = findGroupChildrenByChildId(`devmode-copy-id-${value.id}`, children);
 
@@ -149,6 +185,7 @@ function MakeContextCallback(name: "Guild" | "Role" | "User" | "Channel" | "Mess
                 label="View Raw"
                 action={action}
                 icon={CopyRawIcon}
+                leadingAccessory={{ type: "icon", icon: CopyRawIcon }}
             />
         );
     };
@@ -165,8 +202,9 @@ const devContextCallback: NavContextMenuPatchCallback = (children, { id }: { id:
         <Menu.MenuItem
             id={"vc-view-role-raw"}
             label="View Raw"
-            action={() => openViewRawModal(JSON.stringify(role, null, 4), "Role")}
+            action={() => openViewRawModal(role, "Role")}
             icon={CopyRawIcon}
+            leadingAccessory={{ type: "icon", icon: CopyRawIcon }}
         />
     );
 };
@@ -203,7 +241,7 @@ export default definePlugin({
                 }
             };
 
-            const handleContextMenu: MouseEventHandler<HTMLButtonElement> = e => {
+            const handleContextMenu: MouseEventHandler<HTMLDivElement> = e => {
                 if (settings.store.clickMethod === "Left") {
                     e.preventDefault();
                     e.stopPropagation();
@@ -222,8 +260,6 @@ export default definePlugin({
             return {
                 label,
                 icon: CopyRawIcon,
-                message: msg,
-                channel: ChannelStore.getChannel(msg.channel_id),
                 onClick: handleClick,
                 onContextMenu: handleContextMenu
             };

@@ -34,12 +34,16 @@ export class RunningGameStore extends FluxStore {
     getCandidateGames(): RunningGame[];
     getCurrentGameForAnalytics(): RunningGame | null;
     getCurrentNonGameForAnalytics(): RunningGame | null;
+    getDebugRunningGame(): RunningGame | null;
+    getDetectionDebug(): { timestamp: number; totalFromNative: number; entries: { game: RunningGame; outcome: { kind: string; }; }[]; } | null;
+    canCollectExecutableFingerprintsForRunningGames(): boolean;
     getGameForName(name: string): RunningGame | null;
     getGameForPID(pid: number): RunningGame | null;
     getGameOrTransformedSubgameForPID(pid: number): RunningGame | null;
     getGameOverlayStatus(game: RunningGame): GameOverlayStatus | null;
     getGamesSeen(includeHidden?: boolean): RunningGame[];
     getLauncherForPID(pid: number): RunningGame | null;
+    getSdkResolutionForPID(pid: number): { type: 0; } | { type: 1 | 2; game: { id: string; name: string; }; };
     getObservedAppNameForWindow(windowHandle: number): string | null;
     getOverlayEnabledForGame(game: RunningGame): boolean;
     getOverlayOptionsForPID(pid: number): object | null;
@@ -53,8 +57,9 @@ export class RunningGameStore extends FluxStore {
     getSystemServiceStatus(service: string): SystemServiceStatus;
     getVisibleGame(): RunningGame | null;
     getVisibleRunningGames(): RunningGame[];
-    isDetectionEnabled(type?: string): boolean;
+    isDetectionEnabled(game: RunningGame): boolean;
     isGamesSeenLoaded(): boolean;
+    isGameSeen(gameId: string): boolean;
     isObservedAppRunning(app: string): boolean;
     isSystemServiceInitialized(service: string): boolean;
     shouldContinueWithoutElevatedProcessForPID(pid: number): boolean;

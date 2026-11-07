@@ -12,7 +12,7 @@ import { reporterData } from "@debug/reporterData";
 import { getIntlMessageFromHash } from "@utils/discord";
 import { canonicalizeMatch, canonicalizeReplace } from "@utils/patches";
 import { filters, findAll, search, wreq } from "@webpack";
-import { React, Toasts, useState } from "@webpack/common";
+import { React, showToast,useState } from "@webpack/common";
 
 import { CLIENT_VERSION, logger, PORT, settings } from ".";
 import { Recieve } from "./types";
@@ -65,13 +65,10 @@ export function initWs(isManual = false) {
 
         try {
             if (settings.store.notifyOnAutoConnect || isManual) {
-                Toasts.show({
-                    message: "Connected to WebSocket",
-                    id: Toasts.genId(),
-                    type: Toasts.Type.SUCCESS,
-                    options: {
-                        position: Toasts.Position.TOP
-                    }
+                showToast({
+                    text: "Connected to WebSocket",
+                    variant: "success",
+                    position: "top"
                 });
             }
         }
@@ -87,13 +84,10 @@ export function initWs(isManual = false) {
 
         logger.error("Dev Companion Error:", e);
 
-        Toasts.show({
-            message: "Dev Companion Error",
-            id: Toasts.genId(),
-            type: Toasts.Type.FAILURE,
-            options: {
-                position: Toasts.Position.TOP
-            }
+        showToast({
+            text: "Dev Companion Error",
+            variant: "critical",
+            position: "top"
         });
     });
 
@@ -102,13 +96,10 @@ export function initWs(isManual = false) {
 
         logger.info("Dev Companion Disconnected:", e.code, e.reason);
 
-        Toasts.show({
-            message: "Dev Companion Disconnected",
-            id: Toasts.genId(),
-            type: Toasts.Type.FAILURE,
-            options: {
-                position: Toasts.Position.TOP
-            }
+        showToast({
+            text: "Dev Companion Disconnected",
+            variant: "critical",
+            position: "top"
         });
     });
 
@@ -122,11 +113,24 @@ export function initWs(isManual = false) {
         /**
          * @param error the error to reply with. if there is no error, the reply is a sucess
          */
-        function reply(error?: string) {
-            const toSend = { nonce: d.nonce, ok: !error } as Record<string, unknown>;
-            if (error) toSend.error = error;
+        function replyError(error: string) {
+            const toSend = { nonce: d.nonce, ok: false, error } as Record<string, unknown>;
             logger.debug("Replying with:", toSend);
             ws.send(JSON.stringify(toSend));
+        }
+        function replyOk() {
+            const toSend = {
+                nonce: d.nonce,
+                ok: true,
+                type: "genericOk",
+                data: {},
+            } as Record<string, unknown>;
+            logger.debug("Replying with:", toSend);
+            ws.send(JSON.stringify(toSend));
+        }
+        function reply(error?: string) {
+            if (error) replyError(error);
+            else replyOk();
         }
         function replyData(data: OutgoingMessage) {
             const toSend: FullOutgoingMessage = {

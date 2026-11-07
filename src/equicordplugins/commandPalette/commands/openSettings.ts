@@ -5,7 +5,7 @@
  */
 
 import { Logger } from "@utils/Logger";
-import { SettingsRouter, showToast, Toasts } from "@webpack/common";
+import { SettingsRouter, showToast } from "@webpack/common";
 
 export interface SettingsRoute {
     route: string;
@@ -110,7 +110,7 @@ const logger = new Logger("CommandPalette");
 export async function openSettingsPage(route: string, label?: string) {
     const candidates = resolveRouteCandidates(route);
     if (candidates.length === 0) {
-        showToast("No settings page was provided.", Toasts.Type.FAILURE);
+        showToast({ text: "No settings page was provided.", variant: "critical" });
         return false;
     }
 
@@ -124,6 +124,6 @@ export async function openSettingsPage(route: string, label?: string) {
         }
     }
 
-    showToast(`Unable to open ${label ?? "that settings page"}.`, Toasts.Type.FAILURE);
+    showToast({ text: `Unable to open ${label ?? "that settings page"}.`, variant: "critical" });
     return false;
 }

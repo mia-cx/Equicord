@@ -4,13 +4,27 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { openModal } from "@utils/index";
-import { OAuth2AuthorizeModal, showToast, Toasts } from "@webpack/common";
+import { Button } from "@components/Button";
+import { Notice } from "@components/Notice";
+import { useCspPermission } from "@utils/csp";
+import { OAuth2AuthorizeModal, openModal, showToast } from "@webpack/common";
 
 import { settings } from ".";
 
 const databaseTimezones: Record<string, { value: string | null; }> = {};
 const CLIENT_ID = "1377021506810417173";
+
+export function DatabaseUrlNotice() {
+    const { databaseUrl } = settings.use(["databaseUrl"]);
+    const [isAllowed, allow] = useCspPermission(databaseUrl, ["connect-src"], "Timezones");
+    if (isAllowed) return null;
+
+    return (
+        <Notice variant="warning" action={<Button size="small" variant="secondary" onClick={allow}>Allow Host</Button>}>
+            Connections to {URL.parse(databaseUrl)?.host} are blocked. Allow this host if you trust it, then restart Discord.
+        </Notice>
+    );
+}
 
 function getDomain(): string {
     return settings.store.databaseUrl || "https://timezone.creations.works";
@@ -23,7 +37,7 @@ function getRedirectUri(): string {
 function handleApiError(error: any, defaultMessage: string): void {
     console.error(defaultMessage, error);
     const message = error?.message || defaultMessage;
-    showToast(message, Toasts.Type.FAILURE);
+    showToast({ text: message, variant: "critical" });
 }
 
 async function safeJsonParse(response: Response): Promise<any> {
@@ -112,7 +126,7 @@ async function setTimezoneInternal(timezone: string): Promise<boolean> {
             return false;
         }
 
-        showToast("Timezone updated successfully!", Toasts.Type.SUCCESS);
+        showToast({ text: "Timezone updated successfully!", variant: "success" });
         return true;
     } catch (e) {
         handleApiError(e, "Failed to set timezone");
@@ -150,7 +164,7 @@ async function deleteTimezoneInternal(): Promise<boolean> {
             return false;
         }
 
-        showToast("Timezone deleted successfully!", Toasts.Type.SUCCESS);
+        showToast({ text: "Timezone deleted successfully!", variant: "success" });
         return true;
     } catch (e) {
         handleApiError(e, "Failed to delete timezone");
@@ -181,7 +195,7 @@ export function authModal(callback?: () => void) {
                         handleApiError(json, "Authorization failed");
                         return;
                     }
-                    showToast("Authorization successful!", Toasts.Type.SUCCESS);
+                    showToast({ text: "Authorization successful!", variant: "success" });
                     callback?.();
                 } catch (e) {
                     handleApiError(e, "Unexpected error during authorization");
