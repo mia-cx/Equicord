@@ -18,7 +18,7 @@ import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } f
 import { Channel } from "@vencord/discord-types";
 import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, TextInput, useState, WindowStore } from "@webpack/common";
 
-import type { ArchivedAttachment, RawAttachment, RawMessage } from "./native";
+import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
 const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof import("./native")>;
 const logger = new Logger("MessageArchive");
@@ -175,21 +175,37 @@ const isMessage = (value: unknown): value is RawMessage =>
 
 const isMedia = ({ content_type }: RawAttachment) => /^(image|video)\//.test(content_type ?? "");
 
+/** Servers nest channels under the guild, DMs are named after the other user. Channels Discord hasn't loaded go to `unsorted`. */
+function conversationPath(channelId: string, messageGuildId?: string): ConversationPath {
+    const channel = ChannelStore.getChannel(channelId);
+    if (channel?.isDM()) return ["dms", channel.getRecipientId() ?? channelId];
+    if (channel?.isGroupDM()) return ["groups", channelId];
+
+    const guildId = channel?.guild_id ?? messageGuildId;
+    return guildId ? ["servers", guildId, channelId] : ["unsorted", channelId];
+}
+
 /** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
-    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
-
-    const valid = messages?.flat().filter(isMessage).filter(message =>
-        ChannelStore.getChannel(message.channel_id)?.isPrivate() ? directMessages : servers
-    );
+    const valid = messages?.flat().filter(isMessage);
     if (!valid?.length) return;
 
-    const attachments: ArchivedAttachment[] = valid.flatMap(({ channel_id, attachments = [] }) => attachments
-        .filter(attachment => isMedia(attachment) ? saveMedia : saveFiles)
-        .map(attachment => ({ ...attachment, channel_id }))
-    );
+    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
+    const conversations: Conversation[] = [];
 
-    return Native.archive(valid, attachments, maxFileSize * BYTES_PER_MB);
+    for (const channelMessages of Map.groupBy(valid, message => message.channel_id).values()) {
+        const { channel_id, guild_id } = channelMessages[0];
+        const path = conversationPath(channel_id, guild_id);
+        const isPrivate = path[0] === "dms" || path[0] === "groups";
+        if (!(isPrivate ? directMessages : servers)) continue;
+
+        const attachments = channelMessages
+            .flatMap(message => message.attachments ?? [])
+            .filter(attachment => isMedia(attachment) ? saveMedia : saveFiles);
+        conversations.push({ path, messages: channelMessages, attachments });
+    }
+
+    if (conversations.length) return Native.archive(conversations, maxFileSize * BYTES_PER_MB);
 }
 
 const between = ([min, max]: Range) => min + Math.random() * (max - min);
@@ -231,7 +247,7 @@ const isRateLimit = (error: unknown) =>
 
 /** Fetches the page before the oldest archived message. Returns true once the channel's first message is archived. */
 async function fetchOlder(channelId: string) {
-    const before = await Native.oldestMessageId(channelId);
+    const before = await Native.oldestMessageId(conversationPath(channelId));
     const { body } = await RestAPI.get({
         url: Constants.Endpoints.MESSAGES(channelId),
         query: before ? { limit: PAGE_SIZE, before } : { limit: PAGE_SIZE }
@@ -282,7 +298,7 @@ export default definePlugin({
 
     settingsAboutComponent: () => (
         <Paragraph>
-            Messages are written to one JSONL file per channel as you browse. Edits are kept as new lines.
+            Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
             Run /backfill to start or stop a session right away.
         </Paragraph>
     ),
