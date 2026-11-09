@@ -11,8 +11,15 @@ one exception, and they are off by default.
 - New messages and edits that arrive live
 - Search results and the recent-mentions inbox
 
-Each channel gets one file, `<channel_id>.jsonl`, with one raw Discord API
-message per line. Repeated loads of the same message are skipped. An edit adds a
+Each conversation gets one file with one raw Discord API message per line:
+
+```
+servers/<guild_id>/<channel_id>.jsonl
+dms/<user_id>.jsonl
+groups/<channel_id>.jsonl
+unsorted/<channel_id>.jsonl   channels Discord hadn't loaded yet
+```
+ Repeated loads of the same message are skipped. An edit adds a
 new line with a new `edited_timestamp`, so the last line for an `id` is its
 latest version.
 
@@ -21,7 +28,8 @@ latest version.
 - **Archive folder**: where the files go. Defaults to `EquicordData/MessageArchive`.
 - **Direct messages** and **Servers**: which kinds of channel to archive.
 - **Save media** and **Save files**: download images and videos, or every other
-  attachment, to `attachments/<channel_id>/<attachment_id>-<filename>`. Each file
+  attachment, into a folder beside the conversation's file, such as
+  `servers/<guild_id>/<channel_id>/<attachment_id>-<filename>`. Each file
   is fetched from Discord's CDN once.
 - **Max file size**: attachments larger than this are skipped.
 

@@ -5,7 +5,7 @@
  */
 
 import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { RendererSettings } from "@main/settings";
 import { DATA_DIR } from "@main/utils/constants";
@@ -24,19 +24,33 @@ export interface RawAttachment {
 export interface RawMessage {
     id: string;
     channel_id: string;
+    guild_id?: string;
     edited_timestamp?: string | null;
     attachments?: RawAttachment[];
     [key: string]: unknown;
 }
 
-/** An attachment to download, tagged with the channel whose folder it goes in. */
-export type ArchivedAttachment = RawAttachment & { channel_id: string; };
+/** Where a conversation lives under the archive folder, e.g. `["servers", guildId, channelId]` or `["dms", userId]`. */
+export type ConversationPath = string[];
+
+/** One conversation's messages and the attachments to download from them. */
+export interface Conversation {
+    path: ConversationPath;
+    messages: RawMessage[];
+    attachments: RawAttachment[];
+}
 
 const DEFAULT_DIR = join(DATA_DIR, "MessageArchive");
 const ATTACHMENT_HOSTS = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
 const SNOWFLAKE = /^\d+$/;
+const KINDS = new Set(["servers", "dms", "groups", "unsorted"]);
+const MAX_IDS = 2;
 
-/** Seen versions per channel file, loaded lazily from that file. */
+/** The path comes from the renderer, so only a known kind followed by snowflakes may become folders. */
+const isValidPath = ([kind, ...ids]: ConversationPath) =>
+    KINDS.has(kind) && ids.length > 0 && ids.length <= MAX_IDS && ids.every(id => SNOWFLAKE.test(id));
+
+/** Seen versions per conversation file, loaded lazily from that file. */
 const seen = new Map<string, Set<string>>();
 
 /** Writes run one at a time so concurrent batches never race on the seen sets. */
@@ -64,31 +78,25 @@ async function loadSeen(file: string): Promise<Set<string>> {
     return keys;
 }
 
-async function write(dir: string, messages: RawMessage[]) {
-    await mkdir(dir, { recursive: true });
+async function write(base: string, messages: RawMessage[]) {
+    const file = `${base}.jsonl`;
+    const keys = await loadSeen(file);
+    const fresh = messages.filter(message => {
+        const key = versionKey(message);
+        if (keys.has(key)) return false;
+        keys.add(key);
+        return true;
+    });
+    if (!fresh.length) return;
 
-    const byChannel = Map.groupBy(messages, message => message.channel_id);
-    for (const [channelId, channelMessages] of byChannel) {
-        const file = join(dir, `${channelId}.jsonl`);
-        const keys = await loadSeen(file);
-        const fresh = channelMessages.filter(message => {
-            const key = versionKey(message);
-            if (keys.has(key)) return false;
-            keys.add(key);
-            return true;
-        });
-
-        if (fresh.length) {
-            await appendFile(file, fresh.map(message => JSON.stringify(message) + "\n").join(""));
-        }
-    }
+    await mkdir(dirname(file), { recursive: true });
+    await appendFile(file, fresh.map(message => JSON.stringify(message) + "\n").join(""));
 }
 
-async function download(dir: string, attachment: ArchivedAttachment, maxBytes: number) {
-    if (!SNOWFLAKE.test(attachment.id) || !SNOWFLAKE.test(attachment.channel_id)) return;
+async function download(folder: string, attachment: RawAttachment, maxBytes: number) {
+    if (!SNOWFLAKE.test(attachment.id)) return;
     if (!ATTACHMENT_HOSTS.has(new URL(attachment.url).hostname) || attachment.size > maxBytes) return;
 
-    const folder = join(dir, "attachments", attachment.channel_id);
     const file = join(folder, `${attachment.id}-${basename(attachment.filename)}`);
     if (await access(file).then(() => true, () => false)) return;
 
@@ -101,17 +109,22 @@ async function download(dir: string, attachment: ArchivedAttachment, maxBytes: n
 }
 
 /**
- * Appends every unseen message version to `<channel_id>.jsonl` and saves the given attachments to
- * `attachments/<channel_id>/<attachment_id>-<filename>`, both in the archive folder.
+ * Appends every unseen message version to `<path>.jsonl` and saves attachments to
+ * `<path>/<attachment_id>-<filename>`, both under the archive folder.
  */
-export function archive(_: IpcMainInvokeEvent, messages: RawMessage[], attachments: ArchivedAttachment[], maxBytes: number) {
+export function archive(_: IpcMainInvokeEvent, conversations: Conversation[], maxBytes: number) {
     const dir = archiveDir();
 
-    for (const attachment of attachments) {
-        downloads = downloads.then(() => download(dir, attachment, maxBytes)).catch(error => console.error("[MessageArchive]", error));
+    for (const { path, messages, attachments } of conversations) {
+        if (!isValidPath(path)) continue;
+        const base = join(dir, ...path);
+
+        for (const attachment of attachments) {
+            downloads = downloads.then(() => download(base, attachment, maxBytes)).catch(error => console.error("[MessageArchive]", error));
+        }
+        queue = queue.then(() => write(base, messages)).catch(error => console.error("[MessageArchive]", error));
     }
 
-    queue = queue.then(() => write(dir, messages)).catch(error => console.error("[MessageArchive]", error));
     return queue;
 }
 

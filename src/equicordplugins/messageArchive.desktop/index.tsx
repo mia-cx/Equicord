@@ -12,7 +12,7 @@ import { EquicordDevs } from "@utils/constants";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { ChannelStore } from "@webpack/common";
 
-import type { ArchivedAttachment, RawAttachment, RawMessage } from "./native";
+import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
 const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof import("./native")>;
 
@@ -80,21 +80,36 @@ const isMessage = (value: unknown): value is RawMessage =>
 
 const isMedia = ({ content_type }: RawAttachment) => /^(image|video)\//.test(content_type ?? "");
 
+/** Servers nest channels under the guild, DMs are named after the other user. Channels Discord hasn't loaded go to `unsorted`. */
+function conversationPath({ channel_id, guild_id }: RawMessage): ConversationPath {
+    const channel = ChannelStore.getChannel(channel_id);
+    if (channel?.isDM()) return ["dms", channel.getRecipientId() ?? channel_id];
+    if (channel?.isGroupDM()) return ["groups", channel_id];
+
+    const guildId = channel?.guild_id ?? guild_id;
+    return guildId ? ["servers", guildId, channel_id] : ["unsorted", channel_id];
+}
+
 /** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
-    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
-
-    const valid = messages?.flat().filter(isMessage).filter(message =>
-        ChannelStore.getChannel(message.channel_id)?.isPrivate() ? directMessages : servers
-    );
+    const valid = messages?.flat().filter(isMessage);
     if (!valid?.length) return;
 
-    const attachments: ArchivedAttachment[] = valid.flatMap(({ channel_id, attachments = [] }) => attachments
-        .filter(attachment => isMedia(attachment) ? saveMedia : saveFiles)
-        .map(attachment => ({ ...attachment, channel_id }))
-    );
+    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
+    const conversations: Conversation[] = [];
 
-    Native.archive(valid, attachments, maxFileSize * BYTES_PER_MB);
+    for (const channelMessages of Map.groupBy(valid, message => message.channel_id).values()) {
+        const path = conversationPath(channelMessages[0]);
+        const isPrivate = path[0] === "dms" || path[0] === "groups";
+        if (!(isPrivate ? directMessages : servers)) continue;
+
+        const attachments = channelMessages
+            .flatMap(message => message.attachments ?? [])
+            .filter(attachment => isMedia(attachment) ? saveMedia : saveFiles);
+        conversations.push({ path, messages: channelMessages, attachments });
+    }
+
+    if (conversations.length) Native.archive(conversations, maxFileSize * BYTES_PER_MB);
 }
 
 export default definePlugin({
@@ -106,7 +121,7 @@ export default definePlugin({
 
     settingsAboutComponent: () => (
         <Paragraph>
-            Messages are written to one JSONL file per channel as you browse. Edits are kept as new lines.
+            Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
         </Paragraph>
     ),
 
