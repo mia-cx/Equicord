@@ -2,6 +2,8 @@
 
 Saves every message the Discord client loads while you use it, and can scroll
 back through older history on its own while Discord is in the background.
+Without backfill or attachment downloads, it makes no requests of its own: it
+only records what Discord already fetched.
 
 ## What gets saved
 
@@ -14,6 +16,17 @@ Each channel gets one file, `<channel_id>.jsonl`, with one raw Discord API
 message per line. Repeated loads of the same message are skipped. An edit adds a
 new line with a new `edited_timestamp`, so the last line for an `id` is its
 latest version.
+
+## Settings
+
+- **Archive folder**: where the files go. Defaults to `EquicordData/MessageArchive`.
+- **Direct messages** and **Servers**: which kinds of channel to archive and
+  backfill.
+- **Save media** and **Save files**: download images and videos, or every other
+  attachment, to `attachments/<channel_id>/<attachment_id>-<filename>`. Each file
+  is fetched from Discord's CDN once.
+- **Max file size**: attachments larger than this are skipped.
+- **Auto backfill** and the schedule: see below.
 
 ## Backfill
 
@@ -42,11 +55,5 @@ A session started this way keeps running while Discord is focused.
 These requests are the same ones Discord makes when you scroll up, but an
 unattended client paging through history for hours is a pattern Discord can
 see.
-
-## Where
-
-The archive is stored at `EquicordData/MessageArchive`. Open
-**Equicord Settings → Plugins → MessageArchive** and choose
-**Open archive folder** to go straight there.
 
 Desktop only, because the files are written by the native side.

@@ -8,20 +8,23 @@ import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
+import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import { sleep } from "@utils/misc";
 import { formatDurationMs } from "@utils/text";
-import definePlugin, { OptionType, PluginNative } from "@utils/types";
+import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
 import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, TextInput, useState, WindowStore } from "@webpack/common";
 
-import type { RawMessage } from "./native";
+import type { ArchivedAttachment, RawAttachment, RawMessage } from "./native";
 
 const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof import("./native")>;
 const logger = new Logger("MessageArchive");
 
+const BYTES_PER_MB = 1024 * 1024;
+const FOLDER_KEYS: ["folder"] = ["folder"];
 const PAGE_SIZE = 50;
 const IDLE_CHECK_MS = 30_000;
 const SECOND_MS = 1000;
@@ -62,6 +65,27 @@ interface Session {
 let currentRun = 0;
 let session: Session;
 
+function FolderSetting({ setValue }: PluginSettingComponentProps) {
+    const { folder } = settings.use(FOLDER_KEYS);
+
+    async function choose() {
+        const dir = await Native.chooseFolder();
+        if (dir) setValue(dir);
+    }
+
+    return (
+        <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <Heading>Archive folder</Heading>
+            <Paragraph>{folder || "EquicordData/MessageArchive"}</Paragraph>
+            <div style={{ display: "flex", gap: "8px" }}>
+                <Button size="small" onClick={choose}>Choose folder</Button>
+                <Button size="small" variant="secondary" onClick={() => Native.openArchiveFolder()}>Open folder</Button>
+                {folder && <Button size="small" variant="secondary" onClick={() => setValue("")}>Use default</Button>}
+            </div>
+        </section>
+    );
+}
+
 interface NumberInputProps {
     value: number;
     label: string;
@@ -101,6 +125,37 @@ function ScheduleSettings() {
 }
 
 const settings = definePluginSettings({
+    folder: {
+        type: OptionType.COMPONENT,
+        default: "",
+        component: FolderSetting
+    },
+    directMessages: {
+        type: OptionType.BOOLEAN,
+        description: "Archive direct messages and group DMs.",
+        default: true
+    },
+    servers: {
+        type: OptionType.BOOLEAN,
+        description: "Archive server channels.",
+        default: true
+    },
+    saveMedia: {
+        type: OptionType.BOOLEAN,
+        description: "Download images and videos. Fetches each file from Discord's CDN once.",
+        default: false
+    },
+    saveFiles: {
+        type: OptionType.BOOLEAN,
+        description: "Download every other attachment, like documents and audio.",
+        default: false
+    },
+    maxFileSize: {
+        type: OptionType.SLIDER,
+        description: "Skip attachments larger than this many megabytes.",
+        markers: [1, 10, 25, 50, 100, 500],
+        default: 25
+    },
     autoBackfill: {
         type: OptionType.BOOLEAN,
         description: "Scroll back through history on a schedule while Discord is in the background, DMs first.",
@@ -118,9 +173,23 @@ const isMessage = (value: unknown): value is RawMessage =>
     typeof value === "object" && value !== null
     && "id" in value && "channel_id" in value && "author" in value;
 
+const isMedia = ({ content_type }: RawAttachment) => /^(image|video)\//.test(content_type ?? "");
+
+/** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
-    const valid = messages?.flat().filter(isMessage);
-    if (valid?.length) return Native.archive(valid);
+    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
+
+    const valid = messages?.flat().filter(isMessage).filter(message =>
+        ChannelStore.getChannel(message.channel_id)?.isPrivate() ? directMessages : servers
+    );
+    if (!valid?.length) return;
+
+    const attachments: ArchivedAttachment[] = valid.flatMap(({ channel_id, attachments = [] }) => attachments
+        .filter(attachment => isMedia(attachment) ? saveMedia : saveFiles)
+        .map(attachment => ({ ...attachment, channel_id }))
+    );
+
+    return Native.archive(valid, attachments, maxFileSize * BYTES_PER_MB);
 }
 
 const between = ([min, max]: Range) => min + Math.random() * (max - min);
@@ -145,13 +214,16 @@ function pageWait() {
     return Math.max(0, session.pageMs * (1 + between([-jitter, jitter])));
 }
 
+/** DMs first, then every readable server channel, limited to the kinds the scope settings archive. */
 function backfillOrder(): Channel[] {
-    const guildChannels = GuildStore.getGuildIds().flatMap(guildId =>
+    const { directMessages, servers } = settings.store;
+    const privateChannels = directMessages ? ChannelStore.getSortedPrivateChannels() : [];
+    const guildChannels = !servers ? [] : GuildStore.getGuildIds().flatMap(guildId =>
         GuildChannelStore.getChannels(guildId).SELECTABLE
             .flatMap(entry => "channel" in entry ? [entry.channel] : [])
             .filter(channel => PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel))
     );
-    return [...ChannelStore.getSortedPrivateChannels(), ...guildChannels];
+    return [...privateChannels, ...guildChannels];
 }
 
 const isRateLimit = (error: unknown) =>
@@ -209,15 +281,10 @@ export default definePlugin({
     settings,
 
     settingsAboutComponent: () => (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <Paragraph>
-                Messages are written to one JSONL file per channel as you browse. Edits are kept as new lines.
-                Run /backfill to start or stop a session right away.
-            </Paragraph>
-            <Button size="small" onClick={() => Native.openArchiveFolder()}>
-                Open archive folder
-            </Button>
-        </div>
+        <Paragraph>
+            Messages are written to one JSONL file per channel as you browse. Edits are kept as new lines.
+            Run /backfill to start or stop a session right away.
+        </Paragraph>
     ),
 
     commands: [{
