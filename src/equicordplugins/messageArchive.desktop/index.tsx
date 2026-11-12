@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
+import { ApplicationCommandInputType, ApplicationCommandOptionType, findOption, sendBotMessage } from "@api/Commands";
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
@@ -59,11 +59,15 @@ interface Session {
     end: number;
     pageMs: number;
     manual: boolean;
+    /** Set by /backfill: this channel goes first, and the session ends with it unless `continueAfter`. */
+    channelId?: string;
+    continueAfter?: boolean;
 }
 
 /** Bumped on start and stop so a sleeping backfill loop from an earlier run exits. */
 let currentRun = 0;
 let session: Session;
+let done = new Set<string>();
 
 function FolderSetting({ setValue }: PluginSettingComponentProps) {
     const { folder } = settings.use(FOLDER_KEYS);
@@ -185,19 +189,21 @@ function conversationPath(channelId: string, messageGuildId?: string): Conversat
     return guildId ? ["servers", guildId, channelId] : ["unsorted", channelId];
 }
 
+const inScope = ([kind]: ConversationPath) =>
+    kind === "dms" || kind === "groups" ? settings.store.directMessages : settings.store.servers;
+
 /** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
     const valid = messages?.flat().filter(isMessage);
     if (!valid?.length) return;
 
-    const { directMessages, servers, saveMedia, saveFiles, maxFileSize } = settings.store;
+    const { saveMedia, saveFiles, maxFileSize } = settings.store;
     const conversations: Conversation[] = [];
 
     for (const channelMessages of Map.groupBy(valid, message => message.channel_id).values()) {
         const { channel_id, guild_id } = channelMessages[0];
         const path = conversationPath(channel_id, guild_id);
-        const isPrivate = path[0] === "dms" || path[0] === "groups";
-        if (!(isPrivate ? directMessages : servers)) continue;
+        if (!inScope(path)) continue;
 
         const attachments = channelMessages
             .flatMap(message => message.attachments ?? [])
@@ -259,14 +265,22 @@ async function fetchOlder(channelId: string) {
 /** Pages back through unfinished channels during sessions. Scheduled sessions pause while Discord is focused. */
 async function backfill(run: number) {
     session = nextScheduledSession(Date.now());
-    const done = new Set<string>(await DataStore.get(DONE_KEY) ?? []);
+    done = new Set(await DataStore.get(DONE_KEY) ?? []);
 
     while (run === currentRun) {
         const now = Date.now();
         if (now >= session.end) session = nextScheduledSession(now);
 
+        const { channelId, continueAfter } = session;
+        if (channelId && done.has(channelId) && !continueAfter) {
+            sendBotMessage(channelId, { content: "Backfill finished this channel and stopped." });
+            session = nextScheduledSession(now);
+            continue;
+        }
+
         const active = now >= session.start && (session.manual || settings.store.autoBackfill && !WindowStore.isFocused());
-        const channel = active && backfillOrder().find(candidate => !done.has(candidate.id));
+        const pinned = channelId && !done.has(channelId) ? ChannelStore.getChannel(channelId) : undefined;
+        const channel = active && (pinned ?? backfillOrder().find(candidate => !done.has(candidate.id)));
         if (!channel) {
             await sleep(IDLE_CHECK_MS);
             continue;
@@ -299,24 +313,43 @@ export default definePlugin({
     settingsAboutComponent: () => (
         <Paragraph>
             Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
-            Run /backfill to start or stop a session right away.
+            Run /backfill in a channel to back it up to its first message, or again to stop.
         </Paragraph>
     ),
 
     commands: [{
         name: "backfill",
-        description: "Start or stop a backfill session now.",
+        description: "Back up this channel to its first message, or stop a running backfill.",
         inputType: ApplicationCommandInputType.BUILT_IN,
-        execute(_, ctx) {
+        options: [{
+            name: "all",
+            description: "Continue with your other channels once this one is finished.",
+            type: ApplicationCommandOptionType.BOOLEAN,
+            required: false
+        }],
+        execute(args, ctx) {
             const now = Date.now();
+            const channelId = ctx.channel.id;
+
             if (session.manual && now < session.end) {
                 session = nextScheduledSession(now);
-                sendBotMessage(ctx.channel.id, { content: "Backfill stopped." });
+                sendBotMessage(channelId, { content: "Backfill stopped." });
+                return;
+            }
+            if (!inScope(conversationPath(channelId))) {
+                sendBotMessage(channelId, { content: "This kind of channel is turned off in MessageArchive settings." });
                 return;
             }
 
-            session = createSession(now, true);
-            sendBotMessage(ctx.channel.id, { content: `Backfill started for ${formatDurationMs(session.end - now, true, false)}.` });
+            const continueAfter = findOption(args, "all", false);
+            if (done.has(channelId) && !continueAfter) {
+                sendBotMessage(channelId, { content: "This channel is already archived back to its first message." });
+                return;
+            }
+
+            session = { ...createSession(now, true), channelId, continueAfter };
+            const then = continueAfter ? "then your other channels" : "then it stops";
+            sendBotMessage(channelId, { content: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
         }
     }],
 

@@ -57,8 +57,10 @@ The page wait is picked once per session, so some sessions run faster than
 others. Every individual wait then varies by the jitter. A rate limit ends the
 session early.
 
-Run `/backfill` to start a session right away, or to stop the one you started.
-A session started this way keeps running while Discord is focused.
+Run `/backfill` in a channel or DM to back it up to its first message right
+away. The session stops when that channel is finished, or carries on with your
+other channels when you pass `all: True`. Run `/backfill` again to stop it
+early. A session started this way keeps running while Discord is focused.
 
 These requests are the same ones Discord makes when you scroll up, but an
 unattended client paging through history for hours is a pattern Discord can
