@@ -8,6 +8,7 @@ import { ApplicationCommandInputType, ApplicationCommandOptionType, findOption }
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
+import { FormSwitch } from "@components/FormSwitch";
 import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { EquicordDevs } from "@utils/constants";
@@ -16,7 +17,7 @@ import { sleep } from "@utils/misc";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, showToast, TextInput, useState, WindowStore } from "@webpack/common";
+import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, ScrollerThin, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
 
 import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
@@ -25,6 +26,8 @@ const logger = new Logger("MessageArchive");
 
 const BYTES_PER_MB = 1024 * 1024;
 const FOLDER_KEYS: ["folder"] = ["folder"];
+const SERVER_KEYS: ["servers", "flippedServers"] = ["servers", "flippedServers"];
+const SERVER_LIST_HEIGHT = 400;
 const PAGE_SIZE = 50;
 const IDLE_CHECK_MS = 30_000;
 const SECOND_MS = 1000;
@@ -108,6 +111,33 @@ function NumberInput({ value, label, onChange }: NumberInputProps) {
     );
 }
 
+function ServerSettings() {
+    settings.use(SERVER_KEYS);
+    const guildIds = useStateFromStores([SortedGuildStore], () => SortedGuildStore.getFlattenedGuildIds());
+
+    function setAll(value: boolean) {
+        settings.store.servers = value;
+        settings.store.flippedServers = [];
+    }
+
+    return (
+        <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <Heading>Servers</Heading>
+            <FormSwitch
+                title="All servers"
+                description="Run /archive-server in a server to flip just that one."
+                value={guildIds.every(serverInScope)}
+                onChange={setAll}
+            />
+            <ScrollerThin style={{ maxHeight: SERVER_LIST_HEIGHT }}>
+                {guildIds.map(id => (
+                    <FormSwitch key={id} title={GuildStore.getGuild(id)?.name ?? id} value={serverInScope(id)} onChange={() => flipServer(id)} />
+                ))}
+            </ScrollerThin>
+        </section>
+    );
+}
+
 function ScheduleSettings() {
     const [schedule, setSchedule] = useState<Schedule>(() => settings.store.schedule);
 
@@ -146,10 +176,9 @@ const settings = definePluginSettings({
         default: true
     },
     servers: {
-        type: OptionType.BOOLEAN,
-        description: "Archive every server. Run /archive-server in a server to flip just that one.",
+        type: OptionType.COMPONENT,
         default: true,
-        onChange: () => settings.store.flippedServers = []
+        component: ServerSettings
     },
     saveMedia: {
         type: OptionType.BOOLEAN,
@@ -196,8 +225,13 @@ function conversationPath(channelId: string, messageGuildId?: string): Conversat
     return guildId ? ["servers", guildId, channelId] : ["unsorted", channelId];
 }
 
-/** The Servers setting is the default for every server, and /archive-server flips single servers against it. */
+/** `servers` is the default for every server, and `flippedServers` lists the servers set the other way. */
 const serverInScope = (guildId: string) => settings.store.servers !== (settings.store.flippedServers ?? []).includes(guildId);
+
+function flipServer(guildId: string) {
+    const flipped = settings.store.flippedServers ?? [];
+    settings.store.flippedServers = flipped.includes(guildId) ? flipped.filter(id => id !== guildId) : [...flipped, guildId];
+}
 
 const inScope = ([kind, id]: ConversationPath) =>
     kind === "dms" || kind === "groups" ? settings.store.directMessages
@@ -414,8 +448,7 @@ export default definePlugin({
             const guildId = ctx.guild?.id;
             if (!guildId) return showToast({ text: "Run this in a server." });
 
-            const flipped = settings.store.flippedServers ?? [];
-            settings.store.flippedServers = flipped.includes(guildId) ? flipped.filter(id => id !== guildId) : [...flipped, guildId];
+            flipServer(guildId);
             showToast({ text: serverInScope(guildId) ? "This server is archived now." : "This server is no longer archived." });
         }
     }],
