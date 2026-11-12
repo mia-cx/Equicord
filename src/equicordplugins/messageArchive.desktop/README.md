@@ -28,7 +28,8 @@ new `edited_timestamp`, so the last line for an `id` is its latest version.
 
 - **Archive folder**: where the files go. Defaults to `EquicordData/MessageArchive`.
 - **Direct messages** and **Servers**: which kinds of channel to archive and
-  backfill.
+  backfill. **Servers** turns every server on or off at once; run
+  `/archive-server` in a server to flip just that one.
 - **Save media** and **Save files**: download images and videos, or every other
   attachment, into a folder beside the conversation's file, such as
   `servers/<guild_id>/<channel_id>/<attachment_id>-<filename>`. Each file
