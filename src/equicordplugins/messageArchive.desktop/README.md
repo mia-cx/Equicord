@@ -17,18 +17,27 @@ latest version.
 
 ## Backfill
 
-Turn on **Backfill** to have the plugin page back through history while
-Discord is not focused: DMs first, then every server channel you can read.
+Backfill pages back through history in sessions: DMs first, then every
+server channel you can read. Each channel resumes from the oldest message
+already in the archive, so history you scrolled through yourself is never
+fetched again. A channel is finished once Discord returns its first message.
 
-Each channel resumes from the oldest message already in the archive, so
-history you scrolled through yourself is never fetched again. A channel is
-finished once Discord returns its first message.
+Turn on **Auto backfill** to run sessions on a schedule while Discord is not
+focused. Each session picks a random value from each range:
 
-Backfill runs in sessions. Each session starts at a random time between
-**Earliest start hour** and **Latest start hour** (1:00 to 5:00 by default),
-lasts a random length between the minimum and maximum session hours (1 to 3),
-and waits a random interval between pages (4 to 90 seconds). A rate limit ends
-the session early. Focusing Discord pauses it.
+| Setting | Default |
+| --- | --- |
+| Start between | 1 and 5 o'clock (AM) |
+| Run for | 1 to 3 hours |
+| Wait per page | 6 to 30 seconds |
+| Jitter | 75% either way |
+
+The page wait is picked once per session, so some sessions run faster than
+others. Every individual wait then varies by the jitter. A rate limit ends the
+session early.
+
+Run `/backfill` to start a session right away, or to stop the one you started.
+A session started this way keeps running while Discord is focused.
 
 These requests are the same ones Discord makes when you scroll up, but an
 unattended client paging through history for hours is a pattern Discord can

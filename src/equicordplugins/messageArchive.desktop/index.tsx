@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
@@ -11,9 +12,10 @@ import { Paragraph } from "@components/Paragraph";
 import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import { sleep } from "@utils/misc";
+import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, RestAPI, WindowStore } from "@webpack/common";
+import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, TextInput, useState, WindowStore } from "@webpack/common";
 
 import type { RawMessage } from "./native";
 
@@ -22,48 +24,93 @@ const logger = new Logger("MessageArchive");
 
 const PAGE_SIZE = 50;
 const IDLE_CHECK_MS = 30_000;
+const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const DONE_KEY = "MessageArchive_doneChannels";
 
+type Range = [min: number, max: number];
+
+interface Schedule {
+    startHours: Range;
+    sessionHours: Range;
+    pageSeconds: Range;
+    jitterPercent: number;
+}
+
+const DEFAULT_SCHEDULE: Schedule = {
+    startHours: [1, 5],
+    sessionHours: [1, 3],
+    pageSeconds: [6, 30],
+    jitterPercent: 75
+};
+
+const RANGE_ROWS = [
+    { key: "startHours", label: "Start between", joiner: "and", unit: "o'clock" },
+    { key: "sessionHours", label: "Run for", joiner: "to", unit: "hours" },
+    { key: "pageSeconds", label: "Wait per page", joiner: "to", unit: "seconds" }
+] as const;
+
+interface Session {
+    start: number;
+    end: number;
+    pageMs: number;
+    manual: boolean;
+}
+
 /** Bumped on start and stop so a sleeping backfill loop from an earlier run exits. */
 let currentRun = 0;
+let session: Session;
+
+interface NumberInputProps {
+    value: number;
+    label: string;
+    onChange(value: number): void;
+}
+
+function NumberInput({ value, label, onChange }: NumberInputProps) {
+    return (
+        <TextInput type="number" value={String(value)} aria-label={label} onChange={next => onChange(Number(next))} />
+    );
+}
+
+function ScheduleSettings() {
+    const [schedule, setSchedule] = useState<Schedule>(() => settings.store.schedule);
+
+    const update = (next: Schedule) => {
+        setSchedule(next);
+        settings.store.schedule = next;
+    };
+
+    return (
+        <div style={{ display: "grid", gridTemplateColumns: "auto 80px auto 80px auto", gap: "8px", alignItems: "center" }}>
+            {RANGE_ROWS.map(({ key, label, joiner, unit }) => (
+                <React.Fragment key={key}>
+                    <Paragraph>{label}</Paragraph>
+                    <NumberInput value={schedule[key][0]} label={`${label} minimum`} onChange={min => update({ ...schedule, [key]: [min, schedule[key][1]] })} />
+                    <Paragraph>{joiner}</Paragraph>
+                    <NumberInput value={schedule[key][1]} label={`${label} maximum`} onChange={max => update({ ...schedule, [key]: [schedule[key][0], max] })} />
+                    <Paragraph>{unit}</Paragraph>
+                </React.Fragment>
+            ))}
+            <Paragraph>Jitter</Paragraph>
+            <NumberInput value={schedule.jitterPercent} label="Jitter" onChange={jitterPercent => update({ ...schedule, jitterPercent })} />
+            <Paragraph>% either way</Paragraph>
+        </div>
+    );
+}
 
 const settings = definePluginSettings({
-    backfill: {
+    autoBackfill: {
         type: OptionType.BOOLEAN,
-        description: "Scroll back through history while Discord is in the background, DMs first.",
+        description: "Scroll back through history on a schedule while Discord is in the background, DMs first.",
         default: false
     },
-    earliestStartHour: {
-        type: OptionType.NUMBER,
-        description: "Earliest hour of the day a backfill session can start.",
-        default: 1
-    },
-    latestStartHour: {
-        type: OptionType.NUMBER,
-        description: "Latest hour of the day a backfill session can start.",
-        default: 5
-    },
-    minSessionHours: {
-        type: OptionType.NUMBER,
-        description: "Shortest backfill session, in hours.",
-        default: 1
-    },
-    maxSessionHours: {
-        type: OptionType.NUMBER,
-        description: "Longest backfill session, in hours.",
-        default: 3
-    },
-    minIntervalSeconds: {
-        type: OptionType.NUMBER,
-        description: "Shortest wait between pages, in seconds.",
-        default: 4
-    },
-    maxIntervalSeconds: {
-        type: OptionType.NUMBER,
-        description: "Longest wait between pages, in seconds.",
-        default: 90
+    schedule: {
+        type: OptionType.COMPONENT,
+        description: "Each session picks a random start, length, and page wait from these ranges. Every wait then varies by the jitter.",
+        default: DEFAULT_SCHEDULE,
+        component: ScheduleSettings
     }
 });
 
@@ -76,17 +123,26 @@ function archive(messages: unknown[] | undefined) {
     if (valid?.length) return Native.archive(valid);
 }
 
-const between = (min: number, max: number) => min + Math.random() * (max - min);
+const between = ([min, max]: Range) => min + Math.random() * (max - min);
 
-/** Picks the next session: a random start inside the start-hour window, then a random length. */
-function nextSession(now: number) {
-    const { earliestStartHour, latestStartHour, minSessionHours, maxSessionHours } = settings.store;
-    const windowStart = new Date(now).setHours(earliestStartHour, 0, 0, 0);
-    const windowHours = (latestStartHour - earliestStartHour + 24) % 24;
+function createSession(start: number, manual: boolean): Session {
+    const { sessionHours, pageSeconds } = settings.store.schedule;
+    return { start, end: start + between(sessionHours) * HOUR_MS, pageMs: between(pageSeconds) * SECOND_MS, manual };
+}
 
-    let start = windowStart + between(0, windowHours) * HOUR_MS;
-    if (start < now) start += DAY_MS;
-    return { start, end: start + between(minSessionHours, maxSessionHours) * HOUR_MS };
+/** Picks a random start inside the start-hour window, tomorrow if today's has passed. */
+function nextScheduledSession(now: number) {
+    const [earliest, latest] = settings.store.schedule.startHours;
+    const windowStart = new Date(now).setHours(earliest, 0, 0, 0);
+    const windowHours = (latest - earliest + 24) % 24;
+
+    const start = windowStart + between([0, windowHours]) * HOUR_MS;
+    return createSession(start < now ? start + DAY_MS : start, false);
+}
+
+function pageWait() {
+    const jitter = settings.store.schedule.jitterPercent / 100;
+    return Math.max(0, session.pageMs * (1 + between([-jitter, jitter])));
 }
 
 function backfillOrder(): Channel[] {
@@ -112,17 +168,17 @@ async function fetchOlder(channelId: string) {
     return body.length < PAGE_SIZE;
 }
 
-/** Pages back through unfinished channels during randomly timed sessions while Discord is unfocused. */
+/** Pages back through unfinished channels during sessions. Scheduled sessions pause while Discord is focused. */
 async function backfill(run: number) {
+    session = nextScheduledSession(Date.now());
     const done = new Set<string>(await DataStore.get(DONE_KEY) ?? []);
-    let session = nextSession(Date.now());
 
     while (run === currentRun) {
         const now = Date.now();
-        if (now >= session.end) session = nextSession(now);
+        if (now >= session.end) session = nextScheduledSession(now);
 
-        const channel = now >= session.start && settings.store.backfill && !WindowStore.isFocused()
-            && backfillOrder().find(candidate => !done.has(candidate.id));
+        const active = now >= session.start && (session.manual || settings.store.autoBackfill && !WindowStore.isFocused());
+        const channel = active && backfillOrder().find(candidate => !done.has(candidate.id));
         if (!channel) {
             await sleep(IDLE_CHECK_MS);
             continue;
@@ -141,7 +197,7 @@ async function backfill(run: number) {
         }
 
         await DataStore.set(DONE_KEY, [...done]);
-        await sleep(between(settings.store.minIntervalSeconds, settings.store.maxIntervalSeconds) * 1000);
+        await sleep(pageWait());
     }
 }
 
@@ -156,12 +212,30 @@ export default definePlugin({
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <Paragraph>
                 Messages are written to one JSONL file per channel as you browse. Edits are kept as new lines.
+                Run /backfill to start or stop a session right away.
             </Paragraph>
             <Button size="small" onClick={() => Native.openArchiveFolder()}>
                 Open archive folder
             </Button>
         </div>
     ),
+
+    commands: [{
+        name: "backfill",
+        description: "Start or stop a backfill session now.",
+        inputType: ApplicationCommandInputType.BUILT_IN,
+        execute(_, ctx) {
+            const now = Date.now();
+            if (session.manual && now < session.end) {
+                session = nextScheduledSession(now);
+                sendBotMessage(ctx.channel.id, { content: "Backfill stopped." });
+                return;
+            }
+
+            session = createSession(now, true);
+            sendBotMessage(ctx.channel.id, { content: `Backfill started for ${formatDurationMs(session.end - now, true, false)}.` });
+        }
+    }],
 
     start() {
         backfill(++currentRun);
