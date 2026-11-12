@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { ApplicationCommandInputType, ApplicationCommandOptionType, findOption, sendBotMessage } from "@api/Commands";
+import { ApplicationCommandInputType, ApplicationCommandOptionType, findOption } from "@api/Commands";
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
@@ -16,7 +16,7 @@ import { sleep } from "@utils/misc";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, TextInput, useState, WindowStore } from "@webpack/common";
+import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, showToast, TextInput, useState, WindowStore } from "@webpack/common";
 
 import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
@@ -62,12 +62,18 @@ interface Session {
     /** Set by /backfill: this channel goes first, and the session ends with it unless `continueAfter`. */
     channelId?: string;
     continueAfter?: boolean;
+    /** Set by /backfill pause; resuming pushes `end` back by the time spent paused. */
+    pausedAt?: number;
 }
 
 /** Bumped on start and stop so a sleeping backfill loop from an earlier run exits. */
 let currentRun = 0;
 let session: Session;
 let done = new Set<string>();
+
+/** Ends the loop's current wait early, so a command takes effect right away. */
+let wakeUp = () => { };
+const nap = (ms: number) => Promise.race([sleep(ms), new Promise<void>(resolve => { wakeUp = resolve; })]);
 
 function FolderSetting({ setValue }: PluginSettingComponentProps) {
     const { folder } = settings.use(FOLDER_KEYS);
@@ -269,20 +275,21 @@ async function backfill(run: number) {
 
     while (run === currentRun) {
         const now = Date.now();
-        if (now >= session.end) session = nextScheduledSession(now);
-
-        const { channelId, continueAfter } = session;
-        if (channelId && done.has(channelId) && !continueAfter) {
-            sendBotMessage(channelId, { content: "Backfill finished this channel and stopped." });
+        if (!session.pausedAt && now >= session.end) {
+            if (session.manual) showToast({ text: "Backfill ran out of time and stopped." });
             session = nextScheduledSession(now);
-            continue;
         }
 
-        const active = now >= session.start && (session.manual || settings.store.autoBackfill && !WindowStore.isFocused());
+        const { channelId, continueAfter, manual, pausedAt } = session;
+        const active = now >= session.start && !pausedAt && (manual || settings.store.autoBackfill && !WindowStore.isFocused());
         const pinned = channelId && !done.has(channelId) ? ChannelStore.getChannel(channelId) : undefined;
         const channel = active && (pinned ?? backfillOrder().find(candidate => !done.has(candidate.id)));
         if (!channel) {
-            await sleep(IDLE_CHECK_MS);
+            if (active && manual) {
+                showToast({ text: "Backfill finished every channel.", variant: "success" });
+                session = nextScheduledSession(now);
+            }
+            await nap(IDLE_CHECK_MS);
             continue;
         }
 
@@ -291,15 +298,23 @@ async function backfill(run: number) {
         } catch (error) {
             if (isRateLimit(error)) {
                 logger.warn("Rate limited, ending this backfill session.");
-                session.end = now;
+                showToast({ text: "Backfill was rate limited and stopped.", variant: "critical" });
+                session = nextScheduledSession(now);
                 continue;
             }
             logger.warn(`Skipping channel ${channel.id}.`, error);
+            showToast({ text: "Backfill skipped a channel it couldn't load.", variant: "critical" });
             done.add(channel.id);
         }
 
         await DataStore.set(DONE_KEY, [...done]);
-        await sleep(pageWait());
+
+        if (channel.id === channelId && done.has(channelId) && !continueAfter) {
+            showToast({ text: "Backfill finished this channel.", variant: "success" });
+            session = nextScheduledSession(Date.now());
+            continue;
+        }
+        await nap(pageWait());
     }
 }
 
@@ -313,43 +328,75 @@ export default definePlugin({
     settingsAboutComponent: () => (
         <Paragraph>
             Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
-            Run /backfill in a channel to back it up to its first message, or again to stop.
+            Run /backfill start in a channel to back it up to its first message. /backfill pause and /backfill stop control a running backfill.
         </Paragraph>
     ),
 
     commands: [{
         name: "backfill",
-        description: "Back up this channel to its first message, or stop a running backfill.",
+        description: "Back up this channel to its first message.",
         inputType: ApplicationCommandInputType.BUILT_IN,
-        options: [{
-            name: "all",
-            description: "Continue with your other channels once this one is finished.",
-            type: ApplicationCommandOptionType.BOOLEAN,
-            required: false
-        }],
-        execute(args, ctx) {
+        options: [
+            {
+                name: "start",
+                description: "Back up this channel to its first message, or resume a paused backfill.",
+                type: ApplicationCommandOptionType.SUB_COMMAND,
+                options: [{
+                    name: "all",
+                    description: "Continue with your other channels once this one is finished.",
+                    type: ApplicationCommandOptionType.BOOLEAN,
+                    required: false
+                }]
+            },
+            {
+                name: "pause",
+                description: "Pause the running backfill.",
+                type: ApplicationCommandOptionType.SUB_COMMAND
+            },
+            {
+                name: "stop",
+                description: "Stop the running backfill.",
+                type: ApplicationCommandOptionType.SUB_COMMAND
+            }
+        ],
+        execute([{ name, options }], ctx) {
             const now = Date.now();
             const channelId = ctx.channel.id;
+            const running = session.manual && now < session.end;
 
-            if (session.manual && now < session.end) {
+            if (name === "stop") {
+                if (!running) return showToast({ text: "No backfill is running." });
                 session = nextScheduledSession(now);
-                sendBotMessage(channelId, { content: "Backfill stopped." });
-                return;
-            }
-            if (!inScope(conversationPath(channelId))) {
-                sendBotMessage(channelId, { content: "This kind of channel is turned off in MessageArchive settings." });
-                return;
+                return showToast({ text: "Backfill stopped." });
             }
 
-            const continueAfter = findOption(args, "all", false);
+            if (name === "pause") {
+                if (!running) return showToast({ text: "No backfill is running." });
+                if (session.pausedAt) return showToast({ text: "Backfill is already paused." });
+                session.pausedAt = now;
+                return showToast({ text: "Backfill paused. Run /backfill start to resume." });
+            }
+
+            if (running && session.pausedAt) {
+                session.end += now - session.pausedAt;
+                session.pausedAt = undefined;
+                wakeUp();
+                return showToast({ text: "Backfill resumed." });
+            }
+            if (running) return showToast({ text: "Backfill is already running." });
+            if (!inScope(conversationPath(channelId))) {
+                return showToast({ text: "This kind of channel is turned off in MessageArchive settings.", variant: "critical" });
+            }
+
+            const continueAfter = findOption(options, "all", false);
             if (done.has(channelId) && !continueAfter) {
-                sendBotMessage(channelId, { content: "This channel is already archived back to its first message." });
-                return;
+                return showToast({ text: "This channel is already backed up to its first message." });
             }
 
             session = { ...createSession(now, true), channelId, continueAfter };
+            wakeUp();
             const then = continueAfter ? "then your other channels" : "then it stops";
-            sendBotMessage(channelId, { content: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
+            showToast({ text: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
         }
     }],
 
@@ -359,6 +406,7 @@ export default definePlugin({
 
     stop() {
         currentRun++;
+        wakeUp();
     },
 
     flux: {
