@@ -19,17 +19,24 @@ export interface RawMessage {
 }
 
 const ARCHIVE_DIR = join(DATA_DIR, "MessageArchive");
+const SNOWFLAKE = /^\d{1,20}$/;
 
 /** Seen versions per channel, loaded lazily from that channel's file. */
 const seen = new Map<string, Set<string>>();
-
-/** Writes run one at a time so concurrent batches never race on the seen sets. */
-let queue = Promise.resolve();
 
 /** One message id per edit, so later edits append a new version and repeats are skipped. */
 const versionKey = (message: RawMessage) => `${message.id}:${message.edited_timestamp ?? ""}`;
 
 const channelFile = (channelId: string) => join(ARCHIVE_DIR, `${channelId}.jsonl`);
+
+/** Archive work runs one task at a time so the seen sets never race. */
+let queue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = queue.then(task);
+    queue = result.catch(error => console.error("[MessageArchive]", error));
+    return result;
+}
 
 async function loadSeen(channelId: string): Promise<Set<string>> {
     const cached = seen.get(channelId);
@@ -50,6 +57,8 @@ async function write(messages: RawMessage[]) {
 
     const byChannel = Map.groupBy(messages, message => message.channel_id);
     for (const [channelId, channelMessages] of byChannel) {
+        if (!SNOWFLAKE.test(channelId)) continue;
+
         const keys = await loadSeen(channelId);
         const fresh = channelMessages.filter(message => {
             const key = versionKey(message);
@@ -66,8 +75,21 @@ async function write(messages: RawMessage[]) {
 
 /** Appends every unseen message version to `<channel_id>.jsonl` in the archive folder. */
 export function archive(_: IpcMainInvokeEvent, messages: RawMessage[]) {
-    queue = queue.then(() => write(messages)).catch(error => console.error("[MessageArchive]", error));
-    return queue;
+    return enqueue(() => write(messages));
+}
+
+/** The oldest archived message id in a channel, or null when nothing is archived yet. */
+export function oldestMessageId(_: IpcMainInvokeEvent, channelId: string) {
+    if (!SNOWFLAKE.test(channelId)) return null;
+
+    return enqueue(async () => {
+        let oldest: bigint | null = null;
+        for (const key of await loadSeen(channelId)) {
+            const id = BigInt(key.slice(0, key.indexOf(":")));
+            if (oldest === null || id < oldest) oldest = id;
+        }
+        return oldest?.toString() ?? null;
+    });
 }
 
 export function openArchiveFolder() {

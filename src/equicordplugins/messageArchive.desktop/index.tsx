@@ -21,29 +21,49 @@ const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof
 const logger = new Logger("MessageArchive");
 
 const PAGE_SIZE = 50;
-const DAILY_REQUEST_CAP = 1000;
-const REQUEST_DELAY_MS = 3000;
-const REQUEST_JITTER_MS = 5000;
-const BURST_SIZE = 25;
-const BURST_PAUSE_MS = 3 * 60_000;
 const IDLE_CHECK_MS = 30_000;
-const STATE_KEY = "MessageArchive_backfill";
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+const DONE_KEY = "MessageArchive_doneChannels";
 
 /** Bumped on start and stop so a sleeping backfill loop from an earlier run exits. */
 let currentRun = 0;
-
-interface BackfillState {
-    /** Oldest message fetched per channel, or null once the channel is fully archived. */
-    cursors: Record<string, string | null>;
-    day: string;
-    requests: number;
-}
 
 const settings = definePluginSettings({
     backfill: {
         type: OptionType.BOOLEAN,
         description: "Scroll back through history while Discord is in the background, DMs first.",
         default: false
+    },
+    earliestStartHour: {
+        type: OptionType.NUMBER,
+        description: "Earliest hour of the day a backfill session can start.",
+        default: 1
+    },
+    latestStartHour: {
+        type: OptionType.NUMBER,
+        description: "Latest hour of the day a backfill session can start.",
+        default: 5
+    },
+    minSessionHours: {
+        type: OptionType.NUMBER,
+        description: "Shortest backfill session, in hours.",
+        default: 1
+    },
+    maxSessionHours: {
+        type: OptionType.NUMBER,
+        description: "Longest backfill session, in hours.",
+        default: 3
+    },
+    minIntervalSeconds: {
+        type: OptionType.NUMBER,
+        description: "Shortest wait between pages, in seconds.",
+        default: 4
+    },
+    maxIntervalSeconds: {
+        type: OptionType.NUMBER,
+        description: "Longest wait between pages, in seconds.",
+        default: 90
     }
 });
 
@@ -53,7 +73,20 @@ const isMessage = (value: unknown): value is RawMessage =>
 
 function archive(messages: unknown[] | undefined) {
     const valid = messages?.flat().filter(isMessage);
-    if (valid?.length) Native.archive(valid);
+    if (valid?.length) return Native.archive(valid);
+}
+
+const between = (min: number, max: number) => min + Math.random() * (max - min);
+
+/** Picks the next session: a random start inside the start-hour window, then a random length. */
+function nextSession(now: number) {
+    const { earliestStartHour, latestStartHour, minSessionHours, maxSessionHours } = settings.store;
+    const windowStart = new Date(now).setHours(earliestStartHour, 0, 0, 0);
+    const windowHours = (latestStartHour - earliestStartHour + 24) % 24;
+
+    let start = windowStart + between(0, windowHours) * HOUR_MS;
+    if (start < now) start += DAY_MS;
+    return { start, end: start + between(minSessionHours, maxSessionHours) * HOUR_MS };
 }
 
 function backfillOrder(): Channel[] {
@@ -68,45 +101,47 @@ function backfillOrder(): Channel[] {
 const isRateLimit = (error: unknown) =>
     typeof error === "object" && error !== null && "status" in error && error.status === 429;
 
-async function fetchPage(channelId: string, state: BackfillState) {
-    const before = state.cursors[channelId];
-    try {
-        const { body } = await RestAPI.get({
-            url: Constants.Endpoints.MESSAGES(channelId),
-            query: before ? { limit: PAGE_SIZE, before } : { limit: PAGE_SIZE }
-        });
-        archive(body);
-        state.cursors[channelId] = body.length < PAGE_SIZE ? null : body.at(-1).id;
-    } catch (error) {
-        if (isRateLimit(error)) {
-            logger.warn("Rate limited, pausing backfill until tomorrow.");
-            state.requests = DAILY_REQUEST_CAP;
-            return;
-        }
-        logger.warn(`Skipping channel ${channelId}.`, error);
-        state.cursors[channelId] = null;
-    }
+/** Fetches the page before the oldest archived message. Returns true once the channel's first message is archived. */
+async function fetchOlder(channelId: string) {
+    const before = await Native.oldestMessageId(channelId);
+    const { body } = await RestAPI.get({
+        url: Constants.Endpoints.MESSAGES(channelId),
+        query: before ? { limit: PAGE_SIZE, before } : { limit: PAGE_SIZE }
+    });
+    await archive(body);
+    return body.length < PAGE_SIZE;
 }
 
-/** Fetches one page at a time while Discord is unfocused, until every channel reaches its first message. */
+/** Pages back through unfinished channels during randomly timed sessions while Discord is unfocused. */
 async function backfill(run: number) {
-    const state: BackfillState = await DataStore.get(STATE_KEY) ?? { cursors: {}, day: "", requests: 0 };
+    const done = new Set<string>(await DataStore.get(DONE_KEY) ?? []);
+    let session = nextSession(Date.now());
 
     while (run === currentRun) {
-        const today = new Date().toDateString();
-        if (state.day !== today) Object.assign(state, { day: today, requests: 0 });
+        const now = Date.now();
+        if (now >= session.end) session = nextSession(now);
 
-        const channel = settings.store.backfill && !WindowStore.isFocused() && state.requests < DAILY_REQUEST_CAP
-            && backfillOrder().find(candidate => state.cursors[candidate.id] !== null);
+        const channel = now >= session.start && settings.store.backfill && !WindowStore.isFocused()
+            && backfillOrder().find(candidate => !done.has(candidate.id));
         if (!channel) {
             await sleep(IDLE_CHECK_MS);
             continue;
         }
 
-        await fetchPage(channel.id, state);
-        state.requests++;
-        await DataStore.set(STATE_KEY, state);
-        await sleep(state.requests % BURST_SIZE ? REQUEST_DELAY_MS + Math.random() * REQUEST_JITTER_MS : BURST_PAUSE_MS);
+        try {
+            if (await fetchOlder(channel.id)) done.add(channel.id);
+        } catch (error) {
+            if (isRateLimit(error)) {
+                logger.warn("Rate limited, ending this backfill session.");
+                session.end = now;
+                continue;
+            }
+            logger.warn(`Skipping channel ${channel.id}.`, error);
+            done.add(channel.id);
+        }
+
+        await DataStore.set(DONE_KEY, [...done]);
+        await sleep(between(settings.store.minIntervalSeconds, settings.store.maxIntervalSeconds) * 1000);
     }
 }
 
