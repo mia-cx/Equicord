@@ -17,12 +17,18 @@ latest version.
 
 ## Backfill
 
-Turn on **Backfill** to have the plugin page back through history whenever
-Discord is not focused: DMs first, then every server channel you can read. It
-fetches one page of 50 messages every 3 to 8 seconds, pauses for 3 minutes
-after every 25 pages, and stops for the day after 1000 pages or the first rate
-limit. It pauses as soon as you focus Discord and resumes where it left off,
-even after a restart.
+Turn on **Backfill** to have the plugin page back through history while
+Discord is not focused: DMs first, then every server channel you can read.
+
+Each channel resumes from the oldest message already in the archive, so
+history you scrolled through yourself is never fetched again. A channel is
+finished once Discord returns its first message.
+
+Backfill runs in sessions. Each session starts at a random time between
+**Earliest start hour** and **Latest start hour** (1:00 to 5:00 by default),
+lasts a random length between the minimum and maximum session hours (1 to 3),
+and waits a random interval between pages (4 to 90 seconds). A rate limit ends
+the session early. Focusing Discord pauses it.
 
 These requests are the same ones Discord makes when you scroll up, but an
 unattended client paging through history for hours is a pattern Discord can
