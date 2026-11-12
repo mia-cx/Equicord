@@ -147,8 +147,9 @@ const settings = definePluginSettings({
     },
     servers: {
         type: OptionType.BOOLEAN,
-        description: "Archive server channels.",
-        default: true
+        description: "Archive every server. Run /archive-server in a server to flip just that one.",
+        default: true,
+        onChange: () => settings.store.flippedServers = []
     },
     saveMedia: {
         type: OptionType.BOOLEAN,
@@ -177,7 +178,7 @@ const settings = definePluginSettings({
         default: DEFAULT_SCHEDULE,
         component: ScheduleSettings
     }
-});
+}).withPrivateSettings<{ flippedServers?: string[]; }>();
 
 const isMessage = (value: unknown): value is RawMessage =>
     typeof value === "object" && value !== null
@@ -195,8 +196,12 @@ function conversationPath(channelId: string, messageGuildId?: string): Conversat
     return guildId ? ["servers", guildId, channelId] : ["unsorted", channelId];
 }
 
-const inScope = ([kind]: ConversationPath) =>
-    kind === "dms" || kind === "groups" ? settings.store.directMessages : settings.store.servers;
+/** The Servers setting is the default for every server, and /archive-server flips single servers against it. */
+const serverInScope = (guildId: string) => settings.store.servers !== (settings.store.flippedServers ?? []).includes(guildId);
+
+const inScope = ([kind, id]: ConversationPath) =>
+    kind === "dms" || kind === "groups" ? settings.store.directMessages
+        : kind === "servers" ? serverInScope(id) : settings.store.servers;
 
 /** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
@@ -244,9 +249,8 @@ function pageWait() {
 
 /** DMs first, then every readable server channel, limited to the kinds the scope settings archive. */
 function backfillOrder(): Channel[] {
-    const { directMessages, servers } = settings.store;
-    const privateChannels = directMessages ? ChannelStore.getSortedPrivateChannels() : [];
-    const guildChannels = !servers ? [] : GuildStore.getGuildIds().flatMap(guildId =>
+    const privateChannels = settings.store.directMessages ? ChannelStore.getSortedPrivateChannels() : [];
+    const guildChannels = GuildStore.getGuildIds().filter(serverInScope).flatMap(guildId =>
         GuildChannelStore.getChannels(guildId).SELECTABLE
             .flatMap(entry => "channel" in entry ? [entry.channel] : [])
             .filter(channel => PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel))
@@ -277,6 +281,10 @@ async function backfill(run: number) {
         const now = Date.now();
         if (!session.pausedAt && now >= session.end) {
             if (session.manual) showToast({ text: "Backfill ran out of time and stopped." });
+            session = nextScheduledSession(now);
+        }
+        if (session.channelId && !inScope(conversationPath(session.channelId))) {
+            showToast({ text: "Backfill stopped because this channel is no longer archived." });
             session = nextScheduledSession(now);
         }
 
@@ -397,6 +405,18 @@ export default definePlugin({
             wakeUp();
             const then = continueAfter ? "then your other channels" : "then it stops";
             showToast({ text: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
+        }
+    }, {
+        name: "archive-server",
+        description: "Turn archiving on or off for this server.",
+        inputType: ApplicationCommandInputType.BUILT_IN,
+        execute(_, ctx) {
+            const guildId = ctx.guild?.id;
+            if (!guildId) return showToast({ text: "Run this in a server." });
+
+            const flipped = settings.store.flippedServers ?? [];
+            settings.store.flippedServers = flipped.includes(guildId) ? flipped.filter(id => id !== guildId) : [...flipped, guildId];
+            showToast({ text: serverInScope(guildId) ? "This server is archived now." : "This server is no longer archived." });
         }
     }],
 
