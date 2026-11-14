@@ -59,6 +59,10 @@ Messages already covered by an earlier visit are skipped, and channels you can
 no longer open are passed over. Only the message and channel files are read
 from the zip.
 
+Once imported, the settings show how many of your messages the package holds
+and the next three backfill will open. **Replace data package** imports a newer
+one and starts over, and **Remove** forgets it.
+
 Turn on **Auto backfill** to run sessions on a schedule while Discord is not
 focused. Each session picks a random value from each range:
 

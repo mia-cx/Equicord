@@ -13,10 +13,11 @@ import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { EquicordDevs } from "@utils/constants";
 import { sleep } from "@utils/misc";
+import { useAwaiter } from "@utils/react";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, GuildChannelStore, GuildStore, MessageStore, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
+import { ChannelStore, GuildChannelStore, GuildStore, MessageStore, moment, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SnowflakeUtils, SortedGuildStore, TextInput, UserStore, useState, useStateFromStores, WindowStore } from "@webpack/common";
 
 import type { Conversation, ConversationPath, PackageChannel, RawAttachment, RawMessage } from "./native";
 
@@ -326,13 +327,22 @@ async function scrollOlder(channel: Channel) {
     return false;
 }
 
+interface PackageTarget {
+    channel: Channel;
+    messageId: string;
+    /** Position of `messageId` in its package channel's list. */
+    index: number;
+}
+
 /**
- * Opens the newest message of yours from the data package that isn't archived yet, the way a message link does, so
- * Discord loads the conversation around it. Returns false once every reachable package message is archived.
+ * The next `limit` messages of yours from the data package that backfill will open: ones the archive doesn't have
+ * yet, in channels you can still open, channel by channel and newest first.
  */
-async function openPackageMessage() {
+async function upcomingPackageMessages(limit: number) {
+    const upcoming: PackageTarget[] = [];
+
     for (const { channelId, guildId, messageIds } of packageChannels) {
-        const cursor = packageCursor[channelId] ?? 0;
+        let cursor = packageCursor[channelId] ?? 0;
         const channel = ChannelStore.getChannel(channelId);
         if (cursor >= messageIds.length || !channel) continue;
         if (channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
@@ -340,19 +350,37 @@ async function openPackageMessage() {
         const path = conversationPath(channelId, guildId);
         if (!inScope(path)) continue;
 
-        const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
-        if (offset === -1) {
-            packageCursor[channelId] = messageIds.length;
-            continue;
+        while (upcoming.length < limit && cursor < messageIds.length) {
+            const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
+            if (offset === -1) {
+                if (cursor === (packageCursor[channelId] ?? 0)) packageCursor[channelId] = messageIds.length;
+                break;
+            }
+            cursor += offset;
+            upcoming.push({ channel, messageId: messageIds[cursor], index: cursor });
+            cursor++;
         }
-
-        packageCursor[channelId] = cursor + offset + 1;
-        await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
-        visiting = undefined;
-        NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channelId}/${messageIds[cursor + offset]}`);
-        return true;
+        if (upcoming.length >= limit) break;
     }
-    return false;
+    return upcoming;
+}
+
+/** Opens the next package message the way a message link does, so Discord loads the conversation around it. */
+async function openPackageMessage() {
+    const [next] = await upcomingPackageMessages(1);
+    if (!next) return false;
+
+    const { channel, messageId, index } = next;
+    packageCursor[channel.id] = index + 1;
+    await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
+    visiting = undefined;
+    NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
+    return true;
+}
+
+async function loadPackage() {
+    packageChannels = await DataStore.get(PACKAGE_KEY) ?? [];
+    packageCursor = await DataStore.get(PACKAGE_CURSOR_KEY) ?? {};
 }
 
 async function importPackage() {
@@ -366,17 +394,65 @@ async function importPackage() {
     packageChannels = channels;
     packageCursor = {};
     await DataStore.setMany([[PACKAGE_KEY, channels], [PACKAGE_CURSOR_KEY, {}]]);
+    showToast({ text: "Data package imported. Backfill visits your messages from it first.", variant: "success" });
+}
 
-    const count = channels.reduce((sum, { messageIds }) => sum + messageIds.length, 0);
-    showToast({ text: `Imported ${count.toLocaleString()} messages from ${channels.length.toLocaleString()} channels. Backfill visits them first.`, variant: "success" });
+async function removePackage() {
+    packageChannels = [];
+    packageCursor = {};
+    await DataStore.delMany([PACKAGE_KEY, PACKAGE_CURSOR_KEY]);
+}
+
+const UPCOMING_COUNT = 3;
+
+function channelLabel(channel: Channel) {
+    const recipientId = channel.isDM() && channel.getRecipientId();
+    if (recipientId) return `@${UserStore.getUser(recipientId)?.username ?? "unknown user"}`;
+    if (channel.isGroupDM()) return channel.name || "Group DM";
+    return `#${channel.name} in ${GuildStore.getGuild(channel.guild_id)?.name ?? "an unknown server"}`;
+}
+
+function PackageSettings() {
+    const [version, setVersion] = useState(0);
+    const [upcoming, , pending] = useAwaiter(async () => {
+        if (!packageChannels.length) await loadPackage();
+        return upcomingPackageMessages(UPCOMING_COUNT);
+    }, { fallbackValue: [], deps: [version] });
+
+    const act = (action: () => Promise<unknown>) => () => action().then(() => setVersion(v => v + 1));
+    const total = packageChannels.reduce((sum, { messageIds }) => sum + messageIds.length, 0);
+
+    return (
+        <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <Heading>Data package</Heading>
+            {packageChannels.length ? (
+                <>
+                    <Paragraph>{total.toLocaleString()} of your messages from {packageChannels.length.toLocaleString()} channels. Backfill opens the ones that aren't archived yet first, newest first.</Paragraph>
+                    <Paragraph>
+                        {pending ? "Finding the next messages…" : upcoming.length ? "Up next:" : "Every message you can still open is archived."}
+                    </Paragraph>
+                    {!pending && upcoming.map(({ channel, messageId }) => (
+                        <Paragraph key={messageId}>
+                            {channelLabel(channel)}, {moment(SnowflakeUtils.extractTimestamp(messageId)).format("LLL")}
+                        </Paragraph>
+                    ))}
+                </>
+            ) : (
+                <Paragraph>Import your Discord data package and backfill first opens each message of yours that isn't archived yet, newest first, so the conversation around it gets saved.</Paragraph>
+            )}
+            <div style={{ display: "flex", gap: "8px" }}>
+                <Button size="small" onClick={act(importPackage)}>{packageChannels.length ? "Replace data package" : "Import data package"}</Button>
+                {packageChannels.length > 0 && <Button size="small" variant="secondary" onClick={act(removePackage)}>Remove</Button>}
+            </div>
+        </section>
+    );
 }
 
 /** Pages back through unfinished channels during sessions. Scheduled sessions pause while Discord is focused. */
 async function backfill(run: number) {
     session = nextScheduledSession(Date.now());
     done = new Set(await DataStore.get(DONE_KEY) ?? []);
-    packageChannels = await DataStore.get(PACKAGE_KEY) ?? [];
-    packageCursor = await DataStore.get(PACKAGE_CURSOR_KEY) ?? {};
+    await loadPackage();
 
     while (run === currentRun) {
         const now = Date.now();
@@ -439,12 +515,7 @@ export default definePlugin({
                 Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
                 Run /backfill start in a channel to back it up to its first message. /backfill pause and /backfill stop control a running backfill.
             </Paragraph>
-            <Paragraph>
-                Import your Discord data package and backfill first opens each message of yours that isn't archived yet, newest first, so the conversation around it gets saved.
-            </Paragraph>
-            <div>
-                <Button size="small" onClick={importPackage}>Import data package</Button>
-            </div>
+            <PackageSettings />
         </section>
     ),
 
