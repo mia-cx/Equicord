@@ -29,6 +29,7 @@ const SERVER_KEYS: ["servers", "flippedServers"] = ["servers", "flippedServers"]
 const SERVER_LIST_HEIGHT = 400;
 const IDLE_CHECK_MS = 30_000;
 const KEY_GAP_MS = 500;
+const LOAD_TIMEOUT_MS = 10_000;
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -316,15 +317,30 @@ async function scrollOlder(channel: Channel) {
     const { ready, hasMoreBefore } = MessageStore.getMessages(channel.id);
     if (ready && !hasMoreBefore) return true;
 
+    await pressKeys("Home", "PageUp");
+    return false;
+}
+
+/** Focuses the message list and presses each key as real input, with a short pause after each. */
+async function pressKeys(...keys: string[]) {
     const list = document.querySelector<HTMLElement>("[data-list-id^=\"chat-messages\"]");
-    if (!list) return false;
+    if (!list) return;
     if (!list.hasAttribute("tabindex")) list.tabIndex = -1;
     list.focus({ preventScroll: true });
 
-    await Native.pressKey("Home");
-    await sleep(KEY_GAP_MS);
-    await Native.pressKey("PageUp");
-    return false;
+    for (const key of keys) {
+        await Native.pressKey(key);
+        await sleep(KEY_GAP_MS);
+    }
+}
+
+/** Waits, up to a limit, until Discord shows the channel with its messages loaded, so keys land on a list. */
+async function waitForChannel(channelId: string) {
+    const loaded = () => {
+        const { ready, loadingMore } = MessageStore.getMessages(channelId);
+        return SelectedChannelStore.getChannelId() === channelId && ready && !loadingMore;
+    };
+    for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += KEY_GAP_MS) await sleep(KEY_GAP_MS);
 }
 
 interface PackageTarget {
@@ -365,7 +381,10 @@ async function upcomingPackageMessages(limit: number) {
     return upcoming;
 }
 
-/** Opens the next package message the way a message link does, so Discord loads the conversation around it. */
+/**
+ * Opens the next package message the way a message link does, then presses Page Down and Page Up so Discord also
+ * loads the messages after and before it. Returns false once every package message you can open is archived.
+ */
 async function openPackageMessage() {
     const [next] = await upcomingPackageMessages(1);
     if (!next) return false;
@@ -375,6 +394,9 @@ async function openPackageMessage() {
     await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
     visiting = undefined;
     NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
+
+    await waitForChannel(channel.id);
+    await pressKeys("PageDown", "PageUp");
     return true;
 }
 

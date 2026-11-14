@@ -53,11 +53,13 @@ channel is finished once Discord has loaded its first message.
 Choose **Import data package** in the plugin settings and pick the zip Discord
 sends when you request your data. Backfill then visits your own messages from
 it before anything else: channel by channel, starting with the one you last
-wrote in, newest message first. It opens each message the archive doesn't have
-yet, the way a message link does, so Discord loads the conversation around it.
-Messages already covered by an earlier visit are skipped, and channels you can
-no longer open are passed over. Only the message and channel files are read
-from the zip.
+wrote in, newest message first. For each message the archive doesn't have yet,
+it opens the message's link, presses Page Down and Page Up so Discord loads the
+conversation on both sides, then waits a page wait with jitter. Messages
+already covered by an earlier visit are skipped, and channels you can no longer
+open are passed over. Once every package message it can reach is archived,
+backfill moves on to scrolling back through the rest of your history. Only the
+message and channel files are read from the zip.
 
 Once imported, the settings show how many of your messages the package holds
 and the next three backfill will open. **Replace data package** imports a newer
