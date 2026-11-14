@@ -16,7 +16,7 @@ import { sleep } from "@utils/misc";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, ComponentDispatch, GuildChannelStore, GuildStore, MessageStore, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
+import { ChannelStore, GuildChannelStore, GuildStore, MessageStore, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
 
 import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
@@ -27,8 +27,7 @@ const FOLDER_KEYS: ["folder"] = ["folder"];
 const SERVER_KEYS: ["servers", "flippedServers"] = ["servers", "flippedServers"];
 const SERVER_LIST_HEIGHT = 400;
 const IDLE_CHECK_MS = 30_000;
-const SCROLL_STEP_MS = 150;
-const MAX_SCROLL_STEPS = 100;
+const KEY_GAP_MS = 500;
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -297,8 +296,8 @@ let visiting: string | undefined;
 /**
  * Moves one step back through a channel the way a person would, so Discord makes every request itself and the
  * flux listeners archive what it loads. The first step opens the channel at its oldest archived message, like a
- * message link. Every later step presses Page Up in quick succession until Discord starts loading older messages,
- * which reaches the top like Home without the lockups Home causes. Returns true once the first message is loaded.
+ * message link. Every later step focuses the message list and presses Home, to reach the top of what's loaded, then
+ * Page Up, so Discord loads the page before it. Returns true once the channel's first message is loaded.
  */
 async function scrollOlder(channel: Channel) {
     if (visiting !== channel.id || SelectedChannelStore.getChannelId() !== channel.id) {
@@ -308,14 +307,17 @@ async function scrollOlder(channel: Channel) {
         return false;
     }
 
-    for (let step = 0; step < MAX_SCROLL_STEPS && SelectedChannelStore.getChannelId() === channel.id; step++) {
-        const { ready, hasMoreBefore, loadingMore } = MessageStore.getMessages(channel.id);
-        if (ready && !hasMoreBefore) return true;
-        if (loadingMore) break;
+    const { ready, hasMoreBefore } = MessageStore.getMessages(channel.id);
+    if (ready && !hasMoreBefore) return true;
 
-        ComponentDispatch.dispatchToLastSubscribed("SCROLL_PAGE_UP");
-        await sleep(SCROLL_STEP_MS);
-    }
+    const list = document.querySelector<HTMLElement>("[data-list-id^=\"chat-messages\"]");
+    if (!list) return false;
+    if (!list.hasAttribute("tabindex")) list.tabIndex = -1;
+    list.focus({ preventScroll: true });
+
+    await Native.pressKey("Home");
+    await sleep(KEY_GAP_MS);
+    await Native.pressKey("PageUp");
     return false;
 }
 
