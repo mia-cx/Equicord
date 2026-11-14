@@ -1,9 +1,9 @@
 # MessageArchive
 
 Saves every message the Discord client loads while you use it, and can scroll
-back through older history on its own while Discord is in the background.
-Without backfill or attachment downloads, it makes no requests of its own: it
-only records what Discord already fetched.
+back through older history on its own while Discord is in the background. It
+never calls Discord's API itself: it only records what the client loaded.
+Attachment downloads, off by default, are the one exception.
 
 ## What gets saved
 
@@ -40,10 +40,11 @@ new `edited_timestamp`, so the last line for an `id` is its latest version.
 
 ## Backfill
 
-Backfill pages back through history in sessions: DMs first, then every
-server channel you can read. Each channel resumes from the oldest message
-already in the archive, so history you scrolled through yourself is never
-fetched again. A channel is finished once Discord returns its first message.
+Backfill scrolls the client back through history in sessions: DMs first, then
+every server channel you can read. It opens each channel at the oldest message
+already in the archive, the way a message link does, then presses Page Up on a
+timer. Discord loads older messages as it would for you, and the archive saves
+them. A channel is finished once Discord has loaded its first message.
 
 Turn on **Auto backfill** to run sessions on a schedule while Discord is not
 focused. Each session picks a random value from each range:
@@ -56,18 +57,17 @@ focused. Each session picks a random value from each range:
 | Jitter | 75% either way |
 
 The page wait is picked once per session, so some sessions run faster than
-others. Every individual wait then varies by the jitter. A rate limit ends the
-session early.
+others. Every individual wait then varies by the jitter.
 
 Run `/backfill start` in a channel or DM to back it up to its first message
 right away. The session stops when that channel is finished, or carries on with
 your other channels when you pass `all: True`. A session started this way keeps
-running while Discord is focused. `/backfill pause` holds it until the next
-`/backfill start`, and `/backfill stop` ends it. A toast shows when a session
-starts, pauses, resumes, finishes, runs out of time, or hits an error.
+running while Discord is focused, and pauses if you switch to another channel.
+`/backfill pause` holds it until the next `/backfill start`, and
+`/backfill stop` ends it. A toast shows when a session starts, pauses, resumes,
+finishes, or runs out of time.
 
-These requests are the same ones Discord makes when you scroll up, but an
-unattended client paging through history for hours is a pattern Discord can
-see.
+An unattended client scrolling through history for hours is still a pattern
+Discord can see.
 
 Desktop only, because the files are written by the native side.

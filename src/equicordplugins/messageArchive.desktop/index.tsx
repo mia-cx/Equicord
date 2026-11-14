@@ -12,23 +12,20 @@ import { FormSwitch } from "@components/FormSwitch";
 import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { EquicordDevs } from "@utils/constants";
-import { Logger } from "@utils/Logger";
 import { sleep } from "@utils/misc";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } from "@utils/types";
 import { Channel } from "@vencord/discord-types";
-import { ChannelStore, Constants, GuildChannelStore, GuildStore, PermissionsBits, PermissionStore, React, RestAPI, ScrollerThin, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
+import { ChannelStore, ComponentDispatch, GuildChannelStore, GuildStore, MessageStore, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
 
 import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
 
 const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof import("./native")>;
-const logger = new Logger("MessageArchive");
 
 const BYTES_PER_MB = 1024 * 1024;
 const FOLDER_KEYS: ["folder"] = ["folder"];
 const SERVER_KEYS: ["servers", "flippedServers"] = ["servers", "flippedServers"];
 const SERVER_LIST_HEIGHT = 400;
-const PAGE_SIZE = 50;
 const IDLE_CHECK_MS = 30_000;
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
@@ -292,18 +289,27 @@ function backfillOrder(): Channel[] {
     return [...privateChannels, ...guildChannels];
 }
 
-const isRateLimit = (error: unknown) =>
-    typeof error === "object" && error !== null && "status" in error && error.status === 429;
+/** The channel backfill last opened, so it jumps to the archive's oldest message once per visit. */
+let visiting: string | undefined;
 
-/** Fetches the page before the oldest archived message. Returns true once the channel's first message is archived. */
-async function fetchOlder(channelId: string) {
-    const before = await Native.oldestMessageId(conversationPath(channelId));
-    const { body } = await RestAPI.get({
-        url: Constants.Endpoints.MESSAGES(channelId),
-        query: before ? { limit: PAGE_SIZE, before } : { limit: PAGE_SIZE }
-    });
-    await archive(body);
-    return body.length < PAGE_SIZE;
+/**
+ * Moves one step back through a channel the way a person would, so Discord makes every request itself and the
+ * flux listeners archive what it loads. The first step opens the channel at its oldest archived message, like a
+ * message link; every later step presses Page Up. Returns true once the channel's first message is loaded.
+ */
+async function scrollOlder(channel: Channel) {
+    if (visiting !== channel.id || SelectedChannelStore.getChannelId() !== channel.id) {
+        visiting = channel.id;
+        const oldest = await Native.oldestMessageId(conversationPath(channel.id));
+        NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}${oldest ? `/${oldest}` : ""}`);
+        return false;
+    }
+
+    const { ready, hasMoreBefore } = MessageStore.getMessages(channel.id);
+    if (ready && !hasMoreBefore) return true;
+
+    ComponentDispatch.dispatchToLastSubscribed("SCROLL_PAGE_UP");
+    return false;
 }
 
 /** Pages back through unfinished channels during sessions. Scheduled sessions pause while Discord is focused. */
@@ -335,21 +341,16 @@ async function backfill(run: number) {
             continue;
         }
 
-        try {
-            if (await fetchOlder(channel.id)) done.add(channel.id);
-        } catch (error) {
-            if (isRateLimit(error)) {
-                logger.warn("Rate limited, ending this backfill session.");
-                showToast({ text: "Backfill was rate limited and stopped.", variant: "critical" });
-                session = nextScheduledSession(now);
-                continue;
-            }
-            logger.warn(`Skipping channel ${channel.id}.`, error);
-            showToast({ text: "Backfill skipped a channel it couldn't load.", variant: "critical" });
-            done.add(channel.id);
+        if (manual && visiting === channel.id && SelectedChannelStore.getChannelId() !== channel.id) {
+            session.pausedAt = now;
+            showToast({ text: "Backfill paused because you left the channel. Run /backfill start to resume." });
+            continue;
         }
 
-        await DataStore.set(DONE_KEY, [...done]);
+        if (await scrollOlder(channel)) {
+            done.add(channel.id);
+            await DataStore.set(DONE_KEY, [...done]);
+        }
 
         if (channel.id === channelId && done.has(channelId) && !continueAfter) {
             showToast({ text: "Backfill finished this channel.", variant: "success" });
@@ -422,6 +423,7 @@ export default definePlugin({
             if (running && session.pausedAt) {
                 session.end += now - session.pausedAt;
                 session.pausedAt = undefined;
+                visiting = undefined;
                 wakeUp();
                 return showToast({ text: "Backfill resumed." });
             }
@@ -436,6 +438,7 @@ export default definePlugin({
             }
 
             session = { ...createSession(now, true), channelId, continueAfter };
+            visiting = undefined;
             wakeUp();
             const then = continueAfter ? "then your other channels" : "then it stops";
             showToast({ text: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
