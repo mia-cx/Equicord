@@ -388,7 +388,6 @@ Reuse from `@webpack/common`. Don't recreate.
 
 ## Forbidden
 
-- Raw DOM (`document.querySelector`, `MutationObserver`, `element.style`). Use webpack patches and React.
 - Empty `catch` blocks.
 - `settings.use()` with arrays mutated in place. Reassign with a new array.
 - `localStorage` / `sessionStorage` / `indexedDB`. Use `DataStore`.
