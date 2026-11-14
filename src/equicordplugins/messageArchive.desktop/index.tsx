@@ -81,6 +81,8 @@ let done = new Set<string>();
 let packageChannels: PackageChannel[] = [];
 /** How many of each package channel's message ids backfill has already opened or found archived. */
 let packageCursor: Record<string, number> = {};
+/** Package channels Discord didn't open when backfill tried them, most likely because you lost access. */
+const unreachable = new Set<string>();
 
 /** Ends the loop's current wait early, so a command takes effect right away. */
 let wakeUp = () => { };
@@ -344,6 +346,7 @@ async function waitForChannel(channelId: string) {
         return SelectedChannelStore.getChannelId() === channelId && ready && !loadingMore;
     };
     for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += KEY_GAP_MS) await sleep(KEY_GAP_MS);
+    return loaded();
 }
 
 /** Waits, up to a limit, until the message list holds still, so keys don't cut short Discord's scroll to a linked message. */
@@ -377,8 +380,8 @@ async function upcomingPackageMessages(limit: number) {
     for (const { channelId, guildId, messageIds } of packageChannels) {
         let cursor = packageCursor[channelId] ?? 0;
         const channel = ChannelStore.getChannel(channelId);
-        if (cursor >= messageIds.length || !channel) continue;
-        if (channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
+        if (cursor >= messageIds.length || !channel || unreachable.has(channelId)) continue;
+        if (channel.guild_id && !PermissionStore.can(PermissionsBits.VIEW_CHANNEL | PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
 
         const path = conversationPath(channelId, guildId);
         if (!inScope(path)) continue;
@@ -401,19 +404,23 @@ async function upcomingPackageMessages(limit: number) {
 /**
  * Opens the next package message the way a message link does, waits for Discord's scroll to it to finish, then
  * presses Page Down and Page Up twice, the second one to get above the message itself, so Discord also loads the
- * messages after and before it. Returns false once every package message you can open is archived.
+ * messages after and before it. A channel Discord won't open is passed over until the next reload. Returns false once
+ * every package message you can open is archived.
  */
 async function openPackageMessage() {
     const [next] = await upcomingPackageMessages(1);
     if (!next) return false;
 
     const { channel, messageId, index } = next;
-    packageCursor[channel.id] = index + 1;
-    await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
     visiting = undefined;
     NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
 
-    await waitForChannel(channel.id);
+    if (!await waitForChannel(channel.id)) {
+        unreachable.add(channel.id);
+        return true;
+    }
+    packageCursor[channel.id] = index + 1;
+    await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
     await waitForScrollToSettle();
     await pressKeys("PageDown", "PageUp", "PageUp");
     return true;

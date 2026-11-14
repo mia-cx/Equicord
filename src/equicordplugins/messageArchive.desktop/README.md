@@ -58,8 +58,9 @@ the archive doesn't have yet, it opens the message's link, waits for Discord to
 finish scrolling to it, presses Page Down and then Page Up twice, which gets
 back above the message, so Discord loads the conversation on both sides, then
 waits a page wait with jitter. Messages
-already covered by an earlier visit are skipped, and channels you can no longer
-open are passed over. Once every package message it can reach is archived,
+already covered by an earlier visit are skipped. Channels you can no longer
+open are passed over, including any Discord fails to load within 10 seconds,
+which are tried again after Discord reloads. Once every package message it can reach is archived,
 backfill moves on to scrolling back through the rest of your history. Only the
 message and channel files are read from the zip.
 
