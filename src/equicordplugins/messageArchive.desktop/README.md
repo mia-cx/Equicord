@@ -45,7 +45,19 @@ every server channel you can read. It opens each channel at the oldest message
 already in the archive, the way a message link does. Then, once per page wait,
 it focuses the message list and presses Home to reach the top of what's
 loaded, then Page Up, so Discord loads older messages as it would for you. The
-keys are real input sent to Discord's window. The archive saves what arrives. A channel is finished once Discord has loaded its first message.
+keys are real input sent to Discord's window. The archive saves what arrives. A
+channel is finished once Discord has loaded its first message.
+
+### Data package
+
+Choose **Import data package** in the plugin settings and pick the zip Discord
+sends when you request your data. Backfill then visits your own messages from
+it before anything else: channel by channel, starting with the one you last
+wrote in, newest message first. It opens each message the archive doesn't have
+yet, the way a message link does, so Discord loads the conversation around it.
+Messages already covered by an earlier visit are skipped, and channels you can
+no longer open are passed over. Only the message and channel files are read
+from the zip.
 
 Turn on **Auto backfill** to run sessions on a schedule while Discord is not
 focused. Each session picks a random value from each range:
