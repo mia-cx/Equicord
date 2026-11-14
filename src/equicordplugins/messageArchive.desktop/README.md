@@ -43,9 +43,9 @@ new `edited_timestamp`, so the last line for an `id` is its latest version.
 Backfill scrolls the client back through history in sessions: DMs first, then
 every server channel you can read. It opens each channel at the oldest message
 already in the archive, the way a message link does. Then, once per page wait,
-it presses Page Up in quick succession until it reaches the top of the loaded
-messages and Discord starts loading older ones, as it would for you. The
-archive saves what arrives. A channel is finished once Discord has loaded its first message.
+it focuses the message list and presses Home to reach the top of what's
+loaded, then Page Up, so Discord loads older messages as it would for you. The
+keys are real input sent to Discord's window. The archive saves what arrives. A channel is finished once Discord has loaded its first message.
 
 Turn on **Auto backfill** to run sessions on a schedule while Discord is not
 focused. Each session picks a random value from each range:
