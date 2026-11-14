@@ -52,7 +52,8 @@ channel is finished once Discord has loaded its first message.
 
 Choose **Import data package** in the plugin settings and pick the zip Discord
 sends when you request your data. Backfill then visits your own messages from
-it before anything else, newest first across all channels. For each message
+it before anything else. It finishes one channel, DM or group at a time,
+starting with the one you last wrote in, newest message first. For each message
 the archive doesn't have yet, it opens the message's link, waits for Discord to
 finish scrolling to it, presses Page Down and then Page Up twice, which gets
 back above the message, so Discord loads the conversation on both sides, then

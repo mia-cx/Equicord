@@ -368,40 +368,32 @@ interface PackageTarget {
 
 /**
  * The next `limit` messages of yours from the data package that backfill will open: ones the archive doesn't have
- * yet, in channels you can still open, newest first across every channel. Runs of archived messages it passes over
- * are skipped for good.
+ * yet, in channels you can still open. Channels go one at a time, starting with the one you last wrote in, each
+ * finished newest first before the next.
  */
 async function upcomingPackageMessages(limit: number) {
     const upcoming: PackageTarget[] = [];
-    const cursors = { ...packageCursor };
-    const takenFrom = new Set<string>();
-    const openable = packageChannels.flatMap(({ channelId, guildId, messageIds }) => {
+
+    for (const { channelId, guildId, messageIds } of packageChannels) {
+        let cursor = packageCursor[channelId] ?? 0;
         const channel = ChannelStore.getChannel(channelId);
-        if (!channel || channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) return [];
+        if (cursor >= messageIds.length || !channel) continue;
+        if (channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
+
         const path = conversationPath(channelId, guildId);
-        return inScope(path) ? [{ channel, path, messageIds }] : [];
-    });
-    const head = ({ channel, messageIds }: typeof openable[number]) => messageIds[cursors[channel.id] ?? 0];
+        if (!inScope(path)) continue;
 
-    while (upcoming.length < limit) {
-        let next: typeof openable[number] | undefined;
-        for (const candidate of openable) {
-            const id = head(candidate);
-            if (id && (!next || BigInt(id) > BigInt(head(next)))) next = candidate;
+        while (upcoming.length < limit && cursor < messageIds.length) {
+            const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
+            if (offset === -1) {
+                if (cursor === (packageCursor[channelId] ?? 0)) packageCursor[channelId] = messageIds.length;
+                break;
+            }
+            cursor += offset;
+            upcoming.push({ channel, messageId: messageIds[cursor], index: cursor });
+            cursor++;
         }
-        if (!next) break;
-
-        const { channel, path, messageIds } = next;
-        const index = cursors[channel.id] ?? 0;
-        const offset = await Native.firstUnarchived(path, messageIds.slice(index));
-        if (offset === 0) {
-            upcoming.push({ channel, messageId: messageIds[index], index });
-            takenFrom.add(channel.id);
-            cursors[channel.id] = index + 1;
-            continue;
-        }
-        cursors[channel.id] = offset === -1 ? messageIds.length : index + offset;
-        if (!takenFrom.has(channel.id)) packageCursor[channel.id] = cursors[channel.id];
+        if (upcoming.length >= limit) break;
     }
     return upcoming;
 }
