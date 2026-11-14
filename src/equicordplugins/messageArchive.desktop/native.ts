@@ -174,8 +174,8 @@ const MESSAGE_ID = /"ID":\s*(\d{1,20})/g;
 const newestFirst = (a: string, b: string) => b.length - a.length || (a < b ? 1 : a > b ? -1 : 0);
 
 /**
- * Asks for a Discord data package and reads your messages out of it, grouped by channel. Channels come in order of
- * your latest message in them. Only the message and channel files are unpacked, synchronously, because fflate's
+ * Asks for a Discord data package and reads your messages out of it, grouped by channel, newest first within each.
+ * Only the message and channel files are unpacked, synchronously, because fflate's
  * async unzip starts a worker per file and takes nearly a minute on a package with thousands of channels.
  * Returns null when cancelled.
  */
@@ -210,9 +210,7 @@ export async function importPackage(): Promise<PackageChannel[] | null> {
         if (SNOWFLAKE.test(guildId)) channel.guildId = guildId;
     }
 
-    return [...channels.values()]
-        .filter(({ messageIds }) => messageIds.length)
-        .sort((a, b) => newestFirst(a.messageIds[0], b.messageIds[0]));
+    return [...channels.values()].filter(({ messageIds }) => messageIds.length);
 }
 
 /** Asks for a folder, starting at the current one. Returns null when cancelled. */

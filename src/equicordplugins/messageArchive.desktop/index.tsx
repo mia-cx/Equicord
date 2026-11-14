@@ -30,6 +30,9 @@ const SERVER_LIST_HEIGHT = 400;
 const IDLE_CHECK_MS = 30_000;
 const KEY_GAP_MS = 500;
 const LOAD_TIMEOUT_MS = 10_000;
+/** How long the message list must hold still before keys are pressed after a jump. */
+const SETTLE_MS = 1000;
+const MESSAGE_LIST = "[data-list-id^=\"chat-messages\"]";
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -323,7 +326,7 @@ async function scrollOlder(channel: Channel) {
 
 /** Focuses the message list and presses each key as real input, with a short pause after each. */
 async function pressKeys(...keys: string[]) {
-    const list = document.querySelector<HTMLElement>("[data-list-id^=\"chat-messages\"]");
+    const list = document.querySelector<HTMLElement>(MESSAGE_LIST);
     if (!list) return;
     if (!list.hasAttribute("tabindex")) list.tabIndex = -1;
     list.focus({ preventScroll: true });
@@ -343,6 +346,19 @@ async function waitForChannel(channelId: string) {
     for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += KEY_GAP_MS) await sleep(KEY_GAP_MS);
 }
 
+/** Waits, up to a limit, until the message list holds still, so keys don't cut short Discord's scroll to a linked message. */
+async function waitForScrollToSettle() {
+    let scroller = document.querySelector<HTMLElement>(MESSAGE_LIST)?.parentElement;
+    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!scroller) return;
+
+    let last: number | undefined;
+    for (let waited = 0; waited < LOAD_TIMEOUT_MS && scroller.scrollTop !== last; waited += SETTLE_MS) {
+        last = scroller.scrollTop;
+        await sleep(SETTLE_MS);
+    }
+}
+
 interface PackageTarget {
     channel: Channel;
     messageId: string;
@@ -352,39 +368,48 @@ interface PackageTarget {
 
 /**
  * The next `limit` messages of yours from the data package that backfill will open: ones the archive doesn't have
- * yet, in channels you can still open, channel by channel and newest first.
+ * yet, in channels you can still open, newest first across every channel. Runs of archived messages it passes over
+ * are skipped for good.
  */
 async function upcomingPackageMessages(limit: number) {
     const upcoming: PackageTarget[] = [];
-
-    for (const { channelId, guildId, messageIds } of packageChannels) {
-        let cursor = packageCursor[channelId] ?? 0;
+    const cursors = { ...packageCursor };
+    const takenFrom = new Set<string>();
+    const openable = packageChannels.flatMap(({ channelId, guildId, messageIds }) => {
         const channel = ChannelStore.getChannel(channelId);
-        if (cursor >= messageIds.length || !channel) continue;
-        if (channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
-
+        if (!channel || channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) return [];
         const path = conversationPath(channelId, guildId);
-        if (!inScope(path)) continue;
+        return inScope(path) ? [{ channel, path, messageIds }] : [];
+    });
+    const head = ({ channel, messageIds }: typeof openable[number]) => messageIds[cursors[channel.id] ?? 0];
 
-        while (upcoming.length < limit && cursor < messageIds.length) {
-            const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
-            if (offset === -1) {
-                if (cursor === (packageCursor[channelId] ?? 0)) packageCursor[channelId] = messageIds.length;
-                break;
-            }
-            cursor += offset;
-            upcoming.push({ channel, messageId: messageIds[cursor], index: cursor });
-            cursor++;
+    while (upcoming.length < limit) {
+        let next: typeof openable[number] | undefined;
+        for (const candidate of openable) {
+            const id = head(candidate);
+            if (id && (!next || BigInt(id) > BigInt(head(next)))) next = candidate;
         }
-        if (upcoming.length >= limit) break;
+        if (!next) break;
+
+        const { channel, path, messageIds } = next;
+        const index = cursors[channel.id] ?? 0;
+        const offset = await Native.firstUnarchived(path, messageIds.slice(index));
+        if (offset === 0) {
+            upcoming.push({ channel, messageId: messageIds[index], index });
+            takenFrom.add(channel.id);
+            cursors[channel.id] = index + 1;
+            continue;
+        }
+        cursors[channel.id] = offset === -1 ? messageIds.length : index + offset;
+        if (!takenFrom.has(channel.id)) packageCursor[channel.id] = cursors[channel.id];
     }
     return upcoming;
 }
 
 /**
- * Opens the next package message the way a message link does, then presses Page Down and Page Up twice, the second
- * one to get above the message itself, so Discord also
- * loads the messages after and before it. Returns false once every package message you can open is archived.
+ * Opens the next package message the way a message link does, waits for Discord's scroll to it to finish, then
+ * presses Page Down and Page Up twice, the second one to get above the message itself, so Discord also loads the
+ * messages after and before it. Returns false once every package message you can open is archived.
  */
 async function openPackageMessage() {
     const [next] = await upcomingPackageMessages(1);
@@ -397,6 +422,7 @@ async function openPackageMessage() {
     NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
 
     await waitForChannel(channel.id);
+    await waitForScrollToSettle();
     await pressKeys("PageDown", "PageUp", "PageUp");
     return true;
 }
