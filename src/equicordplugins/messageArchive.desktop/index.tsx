@@ -18,7 +18,7 @@ import definePlugin, { OptionType, PluginNative, PluginSettingComponentProps } f
 import { Channel } from "@vencord/discord-types";
 import { ChannelStore, GuildChannelStore, GuildStore, MessageStore, NavigationRouter, PermissionsBits, PermissionStore, React, ScrollerThin, SelectedChannelStore, showToast, SortedGuildStore, TextInput, useState, useStateFromStores, WindowStore } from "@webpack/common";
 
-import type { Conversation, ConversationPath, RawAttachment, RawMessage } from "./native";
+import type { Conversation, ConversationPath, PackageChannel, RawAttachment, RawMessage } from "./native";
 
 const Native = VencordNative.pluginHelpers.MessageArchive as PluginNative<typeof import("./native")>;
 
@@ -32,6 +32,8 @@ const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const DONE_KEY = "MessageArchive_doneChannels";
+const PACKAGE_KEY = "MessageArchive_package";
+const PACKAGE_CURSOR_KEY = "MessageArchive_packageCursor";
 
 type Range = [min: number, max: number];
 
@@ -71,6 +73,9 @@ interface Session {
 let currentRun = 0;
 let session: Session;
 let done = new Set<string>();
+let packageChannels: PackageChannel[] = [];
+/** How many of each package channel's message ids backfill has already opened or found archived. */
+let packageCursor: Record<string, number> = {};
 
 /** Ends the loop's current wait early, so a command takes effect right away. */
 let wakeUp = () => { };
@@ -321,10 +326,57 @@ async function scrollOlder(channel: Channel) {
     return false;
 }
 
+/**
+ * Opens the newest message of yours from the data package that isn't archived yet, the way a message link does, so
+ * Discord loads the conversation around it. Returns false once every reachable package message is archived.
+ */
+async function openPackageMessage() {
+    for (const { channelId, guildId, messageIds } of packageChannels) {
+        const cursor = packageCursor[channelId] ?? 0;
+        const channel = ChannelStore.getChannel(channelId);
+        if (cursor >= messageIds.length || !channel) continue;
+        if (channel.guild_id && !PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
+
+        const path = conversationPath(channelId, guildId);
+        if (!inScope(path)) continue;
+
+        const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
+        if (offset === -1) {
+            packageCursor[channelId] = messageIds.length;
+            continue;
+        }
+
+        packageCursor[channelId] = cursor + offset + 1;
+        await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
+        visiting = undefined;
+        NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channelId}/${messageIds[cursor + offset]}`);
+        return true;
+    }
+    return false;
+}
+
+async function importPackage() {
+    const channels = await Native.importPackage().catch((error: Error) => {
+        showToast({ text: error.message, variant: "critical" });
+        return null;
+    });
+    if (!channels) return;
+    if (!channels.length) return showToast({ text: "That data package has no messages in it.", variant: "critical" });
+
+    packageChannels = channels;
+    packageCursor = {};
+    await DataStore.setMany([[PACKAGE_KEY, channels], [PACKAGE_CURSOR_KEY, {}]]);
+
+    const count = channels.reduce((sum, { messageIds }) => sum + messageIds.length, 0);
+    showToast({ text: `Imported ${count.toLocaleString()} messages from ${channels.length.toLocaleString()} channels. Backfill visits them first.`, variant: "success" });
+}
+
 /** Pages back through unfinished channels during sessions. Scheduled sessions pause while Discord is focused. */
 async function backfill(run: number) {
     session = nextScheduledSession(Date.now());
     done = new Set(await DataStore.get(DONE_KEY) ?? []);
+    packageChannels = await DataStore.get(PACKAGE_KEY) ?? [];
+    packageCursor = await DataStore.get(PACKAGE_CURSOR_KEY) ?? {};
 
     while (run === currentRun) {
         const now = Date.now();
@@ -340,6 +392,10 @@ async function backfill(run: number) {
         const { channelId, continueAfter, manual, pausedAt } = session;
         const active = now >= session.start && !pausedAt && (manual || settings.store.autoBackfill && !WindowStore.isFocused());
         const pinned = channelId && !done.has(channelId) ? ChannelStore.getChannel(channelId) : undefined;
+        if (active && !pinned && await openPackageMessage()) {
+            await nap(pageWait());
+            continue;
+        }
         const channel = active && (pinned ?? backfillOrder().find(candidate => !done.has(candidate.id)));
         if (!channel) {
             if (active && manual) {
@@ -378,10 +434,18 @@ export default definePlugin({
     settings,
 
     settingsAboutComponent: () => (
-        <Paragraph>
-            Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
-            Run /backfill start in a channel to back it up to its first message. /backfill pause and /backfill stop control a running backfill.
-        </Paragraph>
+        <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <Paragraph>
+                Messages are written as you browse to one JSONL file per conversation, sorted into servers, dms and groups by ID. Edits are kept as new lines.
+                Run /backfill start in a channel to back it up to its first message. /backfill pause and /backfill stop control a running backfill.
+            </Paragraph>
+            <Paragraph>
+                Import your Discord data package and backfill first opens each message of yours that isn't archived yet, newest first, so the conversation around it gets saved.
+            </Paragraph>
+            <div>
+                <Button size="small" onClick={importPackage}>Import data package</Button>
+            </div>
+        </section>
     ),
 
     commands: [{

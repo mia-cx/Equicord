@@ -10,6 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { RendererSettings } from "@main/settings";
 import { DATA_DIR } from "@main/utils/constants";
 import { dialog, IpcMainInvokeEvent, shell } from "electron";
+import { Unzipped, unzipSync } from "fflate";
 
 /** A raw Discord API attachment, as carried inside a raw message. */
 export interface RawAttachment {
@@ -146,6 +147,72 @@ export function oldestMessageId(_: IpcMainInvokeEvent, path: ConversationPath) {
         }
         return oldest?.toString() ?? null;
     });
+}
+
+/** The index of the first of `ids` not yet in a conversation's archive, or -1 when every one is archived. */
+export function firstUnarchived(_: IpcMainInvokeEvent, path: ConversationPath, ids: string[]) {
+    if (!isValidPath(path)) return -1;
+    const file = `${join(archiveDir(), ...path)}.jsonl`;
+
+    return enqueue(async () => {
+        const archived = new Set(Array.from(await loadSeen(file), key => key.slice(0, key.indexOf(":"))));
+        return ids.findIndex(id => !archived.has(id));
+    });
+}
+
+/** A channel from a Discord data package, with the ids of your own messages in it, newest first. */
+export interface PackageChannel {
+    channelId: string;
+    guildId?: string;
+    messageIds: string[];
+}
+
+const PACKAGE_FILE = /^Messages\/c(\d{1,20})\/(messages|channel)\.json$/;
+/** Matched as text because the package writes ids as JSON numbers, which `JSON.parse` would round. */
+const MESSAGE_ID = /"ID":\s*(\d{1,20})/g;
+
+const newestFirst = (a: string, b: string) => b.length - a.length || (a < b ? 1 : a > b ? -1 : 0);
+
+/**
+ * Asks for a Discord data package and reads your messages out of it, grouped by channel. Channels come in order of
+ * your latest message in them. Only the message and channel files are unpacked, synchronously, because fflate's
+ * async unzip starts a worker per file and takes nearly a minute on a package with thousands of channels.
+ * Returns null when cancelled.
+ */
+export async function importPackage(): Promise<PackageChannel[] | null> {
+    const { filePaths: [file] } = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "Discord data package", extensions: ["zip"] }] });
+    if (!file) return null;
+
+    const data = new Uint8Array(await readFile(file));
+    let files: Unzipped;
+    try {
+        files = unzipSync(data, { filter: ({ name }) => PACKAGE_FILE.test(name) });
+    } catch {
+        throw new Error("That file isn't a readable zip.");
+    }
+
+    const channels = new Map<string, PackageChannel>();
+    const decoder = new TextDecoder();
+    for (const [name, contents] of Object.entries(files)) {
+        const match = PACKAGE_FILE.exec(name);
+        if (!match) continue;
+
+        const [, channelId, kind] = match;
+        const channel = channels.get(channelId) ?? { channelId, messageIds: [] };
+        channels.set(channelId, channel);
+
+        const text = decoder.decode(contents);
+        if (kind === "messages") {
+            channel.messageIds = Array.from(text.matchAll(MESSAGE_ID), ([, id]) => id).sort(newestFirst);
+            continue;
+        }
+        const guildId = JSON.parse(text).guild?.id;
+        if (SNOWFLAKE.test(guildId)) channel.guildId = guildId;
+    }
+
+    return [...channels.values()]
+        .filter(({ messageIds }) => messageIds.length)
+        .sort((a, b) => newestFirst(a.messageIds[0], b.messageIds[0]));
 }
 
 /** Asks for a folder, starting at the current one. Returns null when cancelled. */
