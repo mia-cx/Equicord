@@ -221,7 +221,7 @@ export async function chooseFolder() {
     return filePaths[0] ?? null;
 }
 
-const SCROLL_KEYS = new Set(["Home", "PageUp"]);
+const SCROLL_KEYS = new Set(["Home", "PageUp", "PageDown"]);
 
 /** Presses a scroll key in Discord's window as real input, so the browser scrolls the focused list itself. */
 export function pressKey({ sender }: IpcMainInvokeEvent, key: string) {
