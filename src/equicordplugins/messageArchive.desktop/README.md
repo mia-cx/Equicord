@@ -54,7 +54,8 @@ Choose **Import data package** in the plugin settings and pick the zip Discord
 sends when you request your data. Backfill then visits your own messages from
 it before anything else: channel by channel, starting with the one you last
 wrote in, newest message first. For each message the archive doesn't have yet,
-it opens the message's link, presses Page Down and Page Up so Discord loads the
+it opens the message's link, presses Page Down and then Page Up twice, which
+gets back above the message, so Discord loads the
 conversation on both sides, then waits a page wait with jitter. Messages
 already covered by an earlier visit are skipped, and channels you can no longer
 open are passed over. Once every package message it can reach is archived,

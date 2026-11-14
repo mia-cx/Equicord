@@ -382,7 +382,8 @@ async function upcomingPackageMessages(limit: number) {
 }
 
 /**
- * Opens the next package message the way a message link does, then presses Page Down and Page Up so Discord also
+ * Opens the next package message the way a message link does, then presses Page Down and Page Up twice, the second
+ * one to get above the message itself, so Discord also
  * loads the messages after and before it. Returns false once every package message you can open is archived.
  */
 async function openPackageMessage() {
@@ -396,7 +397,7 @@ async function openPackageMessage() {
     NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
 
     await waitForChannel(channel.id);
-    await pressKeys("PageDown", "PageUp");
+    await pressKeys("PageDown", "PageUp", "PageUp");
     return true;
 }
 
