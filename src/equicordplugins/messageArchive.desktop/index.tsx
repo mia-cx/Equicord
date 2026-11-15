@@ -405,8 +405,9 @@ async function upcomingPackageMessages(limit: number, firstChannelId?: string) {
 /**
  * Opens the next package message the way a message link does, waits for Discord's scroll to it to finish, then
  * presses Page Down and Page Up twice, the second one to get above the message itself, so Discord also loads the
- * messages after and before it. A channel Discord won't open is passed over until the next reload. Returns false once
- * every package message you can open is archived.
+ * messages after and before it. A channel Discord won't switch to is passed over until the next reload; one that opens
+ * but loads slowly, as when Discord is rate limited, is tried again after the next wait. Returns false once every
+ * package message you can open is archived.
  */
 async function openPackageMessage(firstChannelId?: string) {
     const [next] = await upcomingPackageMessages(1, firstChannelId);
@@ -417,7 +418,7 @@ async function openPackageMessage(firstChannelId?: string) {
     NavigationRouter.transitionTo(`/channels/${channel.guild_id ?? "@me"}/${channel.id}/${messageId}`);
 
     if (!await waitForChannel(channel.id)) {
-        unreachable.add(channel.id);
+        if (SelectedChannelStore.getChannelId() !== channel.id) unreachable.add(channel.id);
         return true;
     }
     packageCursor[channel.id] = index + 1;
