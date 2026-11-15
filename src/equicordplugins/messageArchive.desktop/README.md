@@ -82,8 +82,10 @@ The page wait is picked once per session, so some sessions run faster than
 others. Every individual wait then varies by the jitter.
 
 Run `/backfill start` in a channel or DM to back it up to its first message
-right away. The session stops when that channel is finished, or carries on with
-your other channels when you pass `all: True`. A session started this way keeps
+right away. With a data package imported, the session works through the package
+first, starting with your messages in that channel. The session stops when that
+channel is finished, or carries on with your other channels when you pass
+`all: True`. A session started this way keeps
 running while Discord is focused, and pauses if you switch to another channel.
 `/backfill pause` holds it until the next `/backfill start`, and
 `/backfill stop` ends it. A toast shows when a session starts, pauses, resumes,

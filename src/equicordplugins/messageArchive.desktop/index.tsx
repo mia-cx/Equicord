@@ -371,13 +371,14 @@ interface PackageTarget {
 
 /**
  * The next `limit` messages of yours from the data package that backfill will open: ones the archive doesn't have
- * yet, in channels you can still open. Channels go one at a time, starting with the one you last wrote in, each
- * finished newest first before the next.
+ * yet, in channels you can still open. Channels go one at a time, starting with `firstChannelId` when given, then the
+ * one you last wrote in, each finished newest first before the next.
  */
-async function upcomingPackageMessages(limit: number) {
+async function upcomingPackageMessages(limit: number, firstChannelId?: string) {
     const upcoming: PackageTarget[] = [];
+    const ordered = [...packageChannels].sort((a, b) => Number(b.channelId === firstChannelId) - Number(a.channelId === firstChannelId));
 
-    for (const { channelId, guildId, messageIds } of packageChannels) {
+    for (const { channelId, guildId, messageIds } of ordered) {
         let cursor = packageCursor[channelId] ?? 0;
         const channel = ChannelStore.getChannel(channelId);
         if (cursor >= messageIds.length || !channel || unreachable.has(channelId)) continue;
@@ -407,8 +408,8 @@ async function upcomingPackageMessages(limit: number) {
  * messages after and before it. A channel Discord won't open is passed over until the next reload. Returns false once
  * every package message you can open is archived.
  */
-async function openPackageMessage() {
-    const [next] = await upcomingPackageMessages(1);
+async function openPackageMessage(firstChannelId?: string) {
+    const [next] = await upcomingPackageMessages(1, firstChannelId);
     if (!next) return false;
 
     const { channel, messageId, index } = next;
@@ -516,7 +517,7 @@ async function backfill(run: number) {
         const { channelId, continueAfter, manual, pausedAt } = session;
         const active = now >= session.start && !pausedAt && (manual || settings.store.autoBackfill && !WindowStore.isFocused());
         const pinned = channelId && !done.has(channelId) ? ChannelStore.getChannel(channelId) : undefined;
-        if (active && !pinned && await openPackageMessage()) {
+        if (active && await openPackageMessage(channelId)) {
             await nap(pageWait());
             continue;
         }
