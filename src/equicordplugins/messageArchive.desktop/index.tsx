@@ -30,9 +30,8 @@ const SERVER_LIST_HEIGHT = 400;
 const IDLE_CHECK_MS = 30_000;
 const KEY_GAP_MS = 500;
 const LOAD_TIMEOUT_MS = 10_000;
-const POLL_MS = 100;
-/** How long the message list must hold still before keys are pressed after a jump. */
-const SETTLE_MS = 300;
+/** How long Discord takes to scroll to a linked message, so keys pressed after it don't cut the scroll short. */
+const JUMP_SCROLL_MS = 500;
 const MESSAGE_LIST = "[data-list-id^=\"chat-messages\"]";
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
@@ -346,22 +345,8 @@ async function waitForChannel(channelId: string) {
         const { ready, loadingMore } = MessageStore.getMessages(channelId);
         return SelectedChannelStore.getChannelId() === channelId && ready && !loadingMore;
     };
-    for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += POLL_MS) await sleep(POLL_MS);
+    for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += KEY_GAP_MS) await sleep(KEY_GAP_MS);
     return loaded();
-}
-
-/** Waits, up to a limit, until the message list holds still, so keys don't cut short Discord's scroll to a linked message. */
-async function waitForScrollToSettle() {
-    let scroller = document.querySelector<HTMLElement>(MESSAGE_LIST)?.parentElement;
-    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
-    if (!scroller) return;
-
-    let last = scroller.scrollTop;
-    for (let waited = 0, still = 0; waited < LOAD_TIMEOUT_MS && still < SETTLE_MS; waited += POLL_MS) {
-        await sleep(POLL_MS);
-        still = scroller.scrollTop === last ? still + POLL_MS : 0;
-        last = scroller.scrollTop;
-    }
 }
 
 interface PackageTarget {
@@ -425,7 +410,7 @@ async function openPackageMessage(firstChannelId?: string) {
     }
     packageCursor[channel.id] = index + 1;
     await DataStore.set(PACKAGE_CURSOR_KEY, packageCursor);
-    await waitForScrollToSettle();
+    await sleep(JUMP_SCROLL_MS);
     await pressKeys("PageDown", "PageUp", "PageUp");
     return true;
 }
