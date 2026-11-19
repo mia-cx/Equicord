@@ -30,8 +30,9 @@ const SERVER_LIST_HEIGHT = 400;
 const IDLE_CHECK_MS = 30_000;
 const KEY_GAP_MS = 500;
 const LOAD_TIMEOUT_MS = 10_000;
+const POLL_MS = 100;
 /** How long the message list must hold still before keys are pressed after a jump. */
-const SETTLE_MS = 1000;
+const SETTLE_MS = 300;
 const MESSAGE_LIST = "[data-list-id^=\"chat-messages\"]";
 const SECOND_MS = 1000;
 const HOUR_MS = 3_600_000;
@@ -345,7 +346,7 @@ async function waitForChannel(channelId: string) {
         const { ready, loadingMore } = MessageStore.getMessages(channelId);
         return SelectedChannelStore.getChannelId() === channelId && ready && !loadingMore;
     };
-    for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += KEY_GAP_MS) await sleep(KEY_GAP_MS);
+    for (let waited = 0; waited < LOAD_TIMEOUT_MS && !loaded(); waited += POLL_MS) await sleep(POLL_MS);
     return loaded();
 }
 
@@ -355,10 +356,11 @@ async function waitForScrollToSettle() {
     while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
     if (!scroller) return;
 
-    let last: number | undefined;
-    for (let waited = 0; waited < LOAD_TIMEOUT_MS && scroller.scrollTop !== last; waited += SETTLE_MS) {
+    let last = scroller.scrollTop;
+    for (let waited = 0, still = 0; waited < LOAD_TIMEOUT_MS && still < SETTLE_MS; waited += POLL_MS) {
+        await sleep(POLL_MS);
+        still = scroller.scrollTop === last ? still + POLL_MS : 0;
         last = scroller.scrollTop;
-        await sleep(SETTLE_MS);
     }
 }
 
@@ -519,7 +521,7 @@ async function backfill(run: number) {
         const active = now >= session.start && !pausedAt && (manual || settings.store.autoBackfill && !WindowStore.isFocused());
         const pinned = channelId && !done.has(channelId) ? ChannelStore.getChannel(channelId) : undefined;
         if (active && await openPackageMessage(channelId)) {
-            await nap(pageWait());
+            await nap(pageWait() - (Date.now() - now));
             continue;
         }
         const channel = active && (pinned ?? backfillOrder().find(candidate => !done.has(candidate.id)));
@@ -548,7 +550,7 @@ async function backfill(run: number) {
             session = nextScheduledSession(Date.now());
             continue;
         }
-        await nap(pageWait());
+        await nap(pageWait() - (Date.now() - now));
     }
 }
 
