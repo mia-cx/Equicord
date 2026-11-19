@@ -79,7 +79,9 @@ focused. Each session picks a random value from each range:
 | Jitter | 75% either way |
 
 The page wait is picked once per session, so some sessions run faster than
-others. Every individual wait then varies by the jitter.
+others. Every individual wait then varies by the jitter. A wait counts from the
+start of each step, so the time spent opening a message and pressing keys is
+part of it.
 
 Run `/backfill start` in a channel or DM to back it up to its first message
 right away. With a data package imported, the session works through the package
