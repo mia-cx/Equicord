@@ -27,16 +27,17 @@ new `edited_timestamp`, so the last line for an `id` is its latest version.
 ## Settings
 
 - **Archive folder**: where the files go. Defaults to `EquicordData/MessageArchive`.
-- **Direct messages** and **Servers**: which kinds of channel to archive and
-  backfill. **Servers** lists every server you're in with its own switch,
-  under an **All servers** switch that sets them all at once. Running
+- **Direct messages** and **Server messages**: which kinds of channel to
+  archive. Below them, **Servers** lists every server you're in with its own
+  switch, under an **All servers** switch that sets them all at once. Running
   `/archive-server` in a server flips that one too.
 - **Save media** and **Save files**: download images and videos, or every other
   attachment, into a folder beside the conversation's file, such as
   `servers/<guild_id>/<channel_id>/<attachment_id>-<filename>`. Each file
   is fetched from Discord's CDN once.
 - **Max file size**: attachments larger than this are skipped.
-- **Auto backfill** and the schedule: see below.
+- **Auto backfill**, **Backfill direct messages**, **Backfill server messages**
+  and the schedule: see below.
 
 ## Backfill
 
@@ -47,6 +48,10 @@ it focuses the message list and presses Home to reach the top of what's
 loaded, then Page Up, so Discord loads older messages as it would for you. The
 keys are real input sent to Discord's window. The archive saves what arrives. A
 channel is finished once Discord has loaded its first message.
+
+Backfill only visits channels that are archived. **Backfill direct messages**
+and **Backfill server messages** narrow it further, so you can backfill only
+your DMs while new server messages are still archived as they arrive.
 
 ### Data package
 

@@ -185,6 +185,11 @@ const settings = definePluginSettings({
         description: "Archive direct messages and group DMs.",
         default: true
     },
+    serverMessages: {
+        type: OptionType.BOOLEAN,
+        description: "Archive server channels, in the servers switched on below.",
+        default: true
+    },
     servers: {
         type: OptionType.COMPONENT,
         default: true,
@@ -210,6 +215,16 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Scroll back through history on a schedule while Discord is in the background, DMs first.",
         default: false
+    },
+    backfillDirectMessages: {
+        type: OptionType.BOOLEAN,
+        description: "Backfill direct messages and group DMs. New messages are archived either way.",
+        default: true
+    },
+    backfillServerMessages: {
+        type: OptionType.BOOLEAN,
+        description: "Backfill server channels. New messages are archived either way.",
+        default: true
     },
     schedule: {
         type: OptionType.COMPONENT,
@@ -243,9 +258,15 @@ function flipServer(guildId: string) {
     settings.store.flippedServers = flipped.includes(guildId) ? flipped.filter(id => id !== guildId) : [...flipped, guildId];
 }
 
-const inScope = ([kind, id]: ConversationPath) =>
-    kind === "dms" || kind === "groups" ? settings.store.directMessages
-        : kind === "servers" ? serverInScope(id) : settings.store.servers;
+const isPrivate = ([kind]: ConversationPath) => kind === "dms" || kind === "groups";
+
+const inScope = (path: ConversationPath) =>
+    isPrivate(path) ? settings.store.directMessages
+        : settings.store.serverMessages && (path[0] === "servers" ? serverInScope(path[1]) : settings.store.servers);
+
+/** Backfill covers what's archived, narrowed by its own switches. */
+const backfillInScope = (path: ConversationPath) =>
+    inScope(path) && (isPrivate(path) ? settings.store.backfillDirectMessages : settings.store.backfillServerMessages);
 
 /** Archives whatever messages an event carries; payload shapes vary per event, so filter at the boundary. */
 function archive(messages: unknown[] | undefined) {
@@ -291,10 +312,12 @@ function pageWait() {
     return Math.max(0, session.pageMs * (1 + between([-jitter, jitter])));
 }
 
-/** DMs first, then every readable server channel, limited to the kinds the scope settings archive. */
+/** DMs first, then every readable server channel, limited to what the archive and backfill switches cover. */
 function backfillOrder(): Channel[] {
-    const privateChannels = settings.store.directMessages ? ChannelStore.getSortedPrivateChannels() : [];
-    const guildChannels = GuildStore.getGuildIds().filter(serverInScope).flatMap(guildId =>
+    const { directMessages, backfillDirectMessages, serverMessages, backfillServerMessages } = settings.store;
+    const privateChannels = directMessages && backfillDirectMessages ? ChannelStore.getSortedPrivateChannels() : [];
+    const guildIds = serverMessages && backfillServerMessages ? GuildStore.getGuildIds().filter(serverInScope) : [];
+    const guildChannels = guildIds.flatMap(guildId =>
         GuildChannelStore.getChannels(guildId).SELECTABLE
             .flatMap(entry => "channel" in entry ? [entry.channel] : [])
             .filter(channel => PermissionStore.can(PermissionsBits.READ_MESSAGE_HISTORY, channel))
@@ -372,7 +395,7 @@ async function upcomingPackageMessages(limit: number, firstChannelId?: string) {
         if (channel.guild_id && !PermissionStore.can(PermissionsBits.VIEW_CHANNEL | PermissionsBits.READ_MESSAGE_HISTORY, channel)) continue;
 
         const path = conversationPath(channelId, guildId);
-        if (!inScope(path)) continue;
+        if (!backfillInScope(path)) continue;
 
         while (upcoming.length < limit && cursor < messageIds.length) {
             const offset = await Native.firstUnarchived(path, messageIds.slice(cursor));
@@ -497,8 +520,8 @@ async function backfill(run: number) {
             if (session.manual) showToast({ text: "Backfill ran out of time and stopped." });
             session = nextScheduledSession(now);
         }
-        if (session.channelId && !inScope(conversationPath(session.channelId))) {
-            showToast({ text: "Backfill stopped because this channel is no longer archived." });
+        if (session.channelId && !backfillInScope(conversationPath(session.channelId))) {
+            showToast({ text: "Backfill stopped because this kind of channel was turned off in MessageArchive settings." });
             session = nextScheduledSession(now);
         }
 
@@ -609,7 +632,7 @@ export default definePlugin({
                 return showToast({ text: "Backfill resumed." });
             }
             if (running) return showToast({ text: "Backfill is already running." });
-            if (!inScope(conversationPath(channelId))) {
+            if (!backfillInScope(conversationPath(channelId))) {
                 return showToast({ text: "This kind of channel is turned off in MessageArchive settings.", variant: "critical" });
             }
 
