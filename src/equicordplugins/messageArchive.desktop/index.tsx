@@ -292,9 +292,17 @@ function archive(messages: unknown[] | undefined) {
 
 const between = ([min, max]: Range) => min + Math.random() * (max - min);
 
-function createSession(start: number, manual: boolean): Session {
-    const { sessionHours, pageSeconds } = settings.store.schedule;
-    return { start, end: start + between(sessionHours) * HOUR_MS, pageMs: between(pageSeconds) * SECOND_MS, manual };
+/** A session from `start`, running `hours` long, or a random length from the schedule's range when left out. */
+function createSession(start: number, manual: boolean, hours = between(settings.store.schedule.sessionHours)): Session {
+    return { start, end: start + hours * HOUR_MS, pageMs: between(settings.store.schedule.pageSeconds) * SECOND_MS, manual };
+}
+
+/** The next time the clock reads `time`, given as 24-hour `HH:MM`, or undefined when it isn't one. */
+function nextTimeOfDay(time: string, now: number) {
+    const [, hours, minutes] = /^(\d{1,2}):(\d{2})$/.exec(time.trim()) ?? [];
+    if (!hours || Number(hours) > 23 || Number(minutes) > 59) return;
+    const today = new Date(now).setHours(Number(hours), Number(minutes), 0, 0);
+    return today > now ? today : today + DAY_MS;
 }
 
 /** Picks a random start inside the start-hour window, tomorrow if today's has passed. */
@@ -588,12 +596,26 @@ export default definePlugin({
                 name: "start",
                 description: "Back up this channel to its first message, or resume a paused backfill.",
                 type: ApplicationCommandOptionType.SUB_COMMAND,
-                options: [{
-                    name: "all",
-                    description: "Continue with your other channels once this one is finished.",
-                    type: ApplicationCommandOptionType.BOOLEAN,
-                    required: false
-                }]
+                options: [
+                    {
+                        name: "all",
+                        description: "Continue with your other channels once this one is finished.",
+                        type: ApplicationCommandOptionType.BOOLEAN,
+                        required: false
+                    },
+                    {
+                        name: "at",
+                        description: "Start at this time, like 23:30, instead of now.",
+                        type: ApplicationCommandOptionType.STRING,
+                        required: false
+                    },
+                    {
+                        name: "duration",
+                        description: "Run for this many hours, like 1.5, instead of a length from the schedule.",
+                        type: ApplicationCommandOptionType.NUMBER,
+                        required: false
+                    }
+                ]
             },
             {
                 name: "pause",
@@ -631,6 +653,9 @@ export default definePlugin({
                 wakeUp();
                 return showToast({ text: "Backfill resumed." });
             }
+            if (running && now < session.start) {
+                return showToast({ text: `A backfill is already set for ${moment(session.start).format("LT")}. Run /backfill stop to cancel it.` });
+            }
             if (running) return showToast({ text: "Backfill is already running." });
             if (!backfillInScope(conversationPath(channelId))) {
                 return showToast({ text: "This kind of channel is turned off in MessageArchive settings.", variant: "critical" });
@@ -641,11 +666,22 @@ export default definePlugin({
                 return showToast({ text: "This channel is already backed up to its first message." });
             }
 
-            session = { ...createSession(now, true), channelId, continueAfter };
+            const at = findOption<string>(options, "at");
+            const start = at ? nextTimeOfDay(at, now) : now;
+            if (!start) return showToast({ text: "Give the start as a 24-hour time, like 23:30.", variant: "critical" });
+            const duration = findOption<number>(options, "duration");
+            if (duration !== undefined && duration <= 0) return showToast({ text: "Give the duration as a number of hours above 0.", variant: "critical" });
+
+            session = { ...createSession(start, true, duration), channelId, continueAfter };
             visiting = undefined;
             wakeUp();
             const then = continueAfter ? "then your other channels" : "then it stops";
-            showToast({ text: `Backfilling this channel, ${then}. Runs for up to ${formatDurationMs(session.end - now, true, false)}.` });
+            const length = formatDurationMs(session.end - start, true, false);
+            showToast({
+                text: at
+                    ? `Backfill starts at ${moment(start).format("LT")} with this channel, ${then}. Runs for up to ${length}.`
+                    : `Backfilling this channel, ${then}. Runs for up to ${length}.`
+            });
         }
     }, {
         name: "archive-server",

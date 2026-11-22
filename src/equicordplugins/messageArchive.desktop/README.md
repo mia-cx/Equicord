@@ -92,7 +92,9 @@ Run `/backfill start` in a channel or DM to back it up to its first message
 right away. With a data package imported, the session works through the package
 first, starting with your messages in that channel. The session stops when that
 channel is finished, or carries on with your other channels when you pass
-`all: True`. A session started this way keeps
+`all: True`. Pass `at: 23:30` to start at that time instead of now, and
+`duration: 1.5` to run for that many hours instead of a length from the
+schedule. Either works without the other. A session started this way keeps
 running while Discord is focused, and pauses if you switch to another channel.
 `/backfill pause` holds it until the next `/backfill start`, and
 `/backfill stop` ends it. A toast shows when a session starts, pauses, resumes,
